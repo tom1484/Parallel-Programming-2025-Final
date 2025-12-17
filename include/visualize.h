@@ -11,10 +11,9 @@
 //   - {timestep}-particle.dat: Particle data (positions, velocities, species, cell IDs)
 void dump_simulation(const std::string& output_dir, int timestep, const ParticleSystem& p_sys, const CellSystem& c_sys);
 
-// Dump final simulation result for evaluation
-// Creates two files in output_dir:
-//   - cell.dat: Final cell data
+// Dump final particle data for evaluation
+// Creates one file in output_dir:
 //   - particle.dat: Final particle data
-void dump_final_result(const std::string& output_dir, const ParticleSystem& p_sys, const CellSystem& c_sys);
+void dump_final_result(const std::string& output_dir, const ParticleSystem& p_sys);
 
 #endif  // DSMC_VISUALIZE_H

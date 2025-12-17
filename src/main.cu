@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
     // =========================================================================
     // Final Result Dump (mandatory for evaluation)
     // =========================================================================
-    dump_final_result(output_dir, p_sys, c_sys);
+    dump_final_result(output_dir, p_sys);
 
     // =========================================================================
     // Cleanup

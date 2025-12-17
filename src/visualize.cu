@@ -9,12 +9,8 @@
 #include "utils.cuh"
 #include "visualize.h"
 
-// Internal helper function that does the actual dump work
-static void dump_impl(const std::string& cell_path, const std::string& particle_path,
-                      const std::string& header_info, const ParticleSystem& p_sys, const CellSystem& c_sys) {
-    // ----------------------------------------------------------
-    // Copy cell data from device to host
-    // ----------------------------------------------------------
+// Internal helper: dump cell data to file
+static void dump_cell_impl(const std::string& cell_path, const std::string& header_info, const CellSystem& c_sys) {
     std::vector<int> h_cell_particle_count(c_sys.total_cells);
     std::vector<int> h_cell_offset(c_sys.total_cells);
     std::vector<float> h_density(c_sys.total_cells);
@@ -29,9 +25,6 @@ static void dump_impl(const std::string& cell_path, const std::string& particle_
     CHECK_CUDA(cudaMemcpy(h_temperature.data(), c_sys.d_temperature, c_sys.total_cells * sizeof(float),
                           cudaMemcpyDeviceToHost));
 
-    // ----------------------------------------------------------
-    // Write cell data
-    // ----------------------------------------------------------
     std::ofstream cell_file(cell_path);
     if (!cell_file.is_open()) {
         fprintf(stderr, "Error: Could not open %s for writing\n", cell_path.c_str());
@@ -47,10 +40,10 @@ static void dump_impl(const std::string& cell_path, const std::string& particle_
                   << h_temperature[i] << "\n";
     }
     cell_file.close();
+}
 
-    // ----------------------------------------------------------
-    // Copy particle data from device to host
-    // ----------------------------------------------------------
+// Internal helper: dump particle data to file
+static void dump_particle_impl(const std::string& particle_path, const std::string& header_info, const ParticleSystem& p_sys) {
     std::vector<PositionType> h_pos(p_sys.total_particles);
     std::vector<VelocityType> h_vel(p_sys.total_particles);
     std::vector<int> h_species(p_sys.total_particles);
@@ -65,9 +58,6 @@ static void dump_impl(const std::string& cell_path, const std::string& particle_
     CHECK_CUDA(
         cudaMemcpy(h_cell_id.data(), p_sys.d_cell_id, p_sys.total_particles * sizeof(int), cudaMemcpyDeviceToHost));
 
-    // ----------------------------------------------------------
-    // Write particle data
-    // ----------------------------------------------------------
     std::ofstream particle_file(particle_path);
     if (!particle_file.is_open()) {
         fprintf(stderr, "Error: Could not open %s for writing\n", particle_path.c_str());
@@ -92,14 +82,13 @@ void dump_simulation(const std::string& output_dir, int timestep, const Particle
     particle_path << output_dir << "/" << std::setw(8) << std::setfill('0') << timestep << "-particle.dat";
     header_info << " at timestep " << timestep;
 
-    dump_impl(cell_path.str(), particle_path.str(), header_info.str(), p_sys, c_sys);
+    dump_cell_impl(cell_path.str(), header_info.str(), c_sys);
+    dump_particle_impl(particle_path.str(), header_info.str(), p_sys);
     printf("Dumped timestep %d: %s, %s\n", timestep, cell_path.str().c_str(), particle_path.str().c_str());
 }
 
-void dump_final_result(const std::string& output_dir, const ParticleSystem& p_sys, const CellSystem& c_sys) {
-    std::string cell_path = output_dir + "/cell.dat";
+void dump_final_result(const std::string& output_dir, const ParticleSystem& p_sys) {
     std::string particle_path = output_dir + "/particle.dat";
-
-    dump_impl(cell_path, particle_path, " (final)", p_sys, c_sys);
-    printf("Dumped final result: %s, %s\n", cell_path.c_str(), particle_path.c_str());
+    dump_particle_impl(particle_path, " (final)", p_sys);
+    printf("Dumped final result: %s\n", particle_path.c_str());
 }
