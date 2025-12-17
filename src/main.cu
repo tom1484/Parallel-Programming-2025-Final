@@ -25,7 +25,6 @@ int main(int argc, char** argv) {
     program.add_argument("-c", "--config").default_value(std::string("config.yaml")).help("Path to config YAML file");
     program.add_argument("-o", "--output").default_value(std::string("outputs")).help("Output directory for dumps");
     program.add_argument("-g", "--geometry").default_value(std::string("")).help("Path to geometry file (optional)");
-    program.add_argument("-d", "--dump").flag().help("Enable dumping simulation state");
     program.add_argument("-s", "--source")
         .append()
         .default_value(std::vector<std::string>{})
@@ -34,12 +33,14 @@ int main(int argc, char** argv) {
         .append()
         .default_value(std::vector<std::string>{})
         .help("Path to schedule .dat file (must match -s count, or use embedded schedule in source YAML)");
-    program.add_argument("--dump-start").default_value(0).scan<'i', int>().help("First timestep to dump (default: 0)");
-    program.add_argument("--dump-max")
+    program.add_argument("--vis").flag().help("Enable visualization dumps (cells only)");
+    program.add_argument("--vis-particle").flag().help("Also dump particles (requires --vis)");
+    program.add_argument("--vis-start").default_value(0).scan<'i', int>().help("First timestep to dump (default: 0)");
+    program.add_argument("--vis-max")
         .default_value(100)
         .scan<'i', int>()
         .help("Maximum number of timesteps to dump (default: 100)");
-    program.add_argument("--dump-skip").default_value(1).scan<'i', int>().help("Dump every N timesteps (default: 1)");
+    program.add_argument("--vis-skip").default_value(1).scan<'i', int>().help("Dump every N timesteps (default: 1)");
 
     try {
         program.parse_args(argc, argv);
@@ -52,12 +53,13 @@ int main(int argc, char** argv) {
     string config_path = program.get<string>("--config");
     string output_dir = program.get<string>("--output");
     string geometry_path = program.get<string>("--geometry");
-    bool dump_enabled = program.get<bool>("--dump");
     vector<string> source_paths = program.get<vector<string>>("--source");
     vector<string> schedule_paths = program.get<vector<string>>("--schedule");
-    int dump_start = program.get<int>("--dump-start");
-    int dump_max = program.get<int>("--dump-max");
-    int dump_skip = program.get<int>("--dump-skip");
+    bool vis_enabled = program.get<bool>("--vis");
+    bool vis_particle = program.get<bool>("--vis-particle");
+    int vis_start = program.get<int>("--vis-start");
+    int vis_max = program.get<int>("--vis-max");
+    int vis_skip = program.get<int>("--vis-skip");
 
     // Validate source/schedule pairing
     if (!schedule_paths.empty() && schedule_paths.size() != source_paths.size()) {
@@ -77,9 +79,10 @@ int main(int argc, char** argv) {
         }
         cout << "\n";
     }
-    cout << "Dump:   " << (dump_enabled ? "enabled" : "disabled");
-    if (dump_enabled) {
-        cout << " (start=" << dump_start << ", max=" << dump_max << ", skip=" << dump_skip << ")";
+    cout << "Vis:    " << (vis_enabled ? "enabled" : "disabled");
+    if (vis_enabled) {
+        cout << " (start=" << vis_start << ", max=" << vis_max << ", skip=" << vis_skip;
+        cout << ", particles=" << (vis_particle ? "yes" : "no") << ")";
     }
     cout << "\n";
 
@@ -176,23 +179,26 @@ int main(int argc, char** argv) {
     // =========================================================================
     string vis_dir = output_dir + "/visualization";
 
-    // Check if visualization directory exists (if dumping is enabled)
-    if (dump_enabled) {
+    // Check if visualization directory exists (if vis is enabled)
+    if (vis_enabled) {
         struct stat st;
         if (stat(vis_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
             cerr << "Error: Visualization directory does not exist: " << vis_dir << "\n";
-            cerr << "Please create it before running with --dump enabled.\n";
+            cerr << "Please create it before running with --vis enabled.\n";
             return 1;
         }
     }
 
-    // Dump counter for tracking how many dumps have been made
-    int dump_count = 0;
+    // Vis counter for tracking how many dumps have been made
+    int vis_count = 0;
 
     // Dump initial state (timestep 0)
-    if (dump_enabled && dump_start == 0 && dump_count < dump_max) {
-        dump_simulation(vis_dir, 0, p_sys, c_sys);
-        dump_count++;
+    if (vis_enabled && vis_start == 0 && vis_count < vis_max) {
+        dump_cells(vis_dir, 0, c_sys);
+        if (vis_particle) {
+            dump_particles(vis_dir, 0, p_sys);
+        }
+        vis_count++;
     }
 
     // =========================================================================
@@ -232,18 +238,21 @@ int main(int argc, char** argv) {
 
         // --- Visualization Dump ---
         int current_step = step + 1;
-        if (dump_enabled && dump_count < dump_max && current_step >= dump_start) {
-            if ((current_step - dump_start) % dump_skip == 0) {
-                dump_simulation(vis_dir, current_step, p_sys, c_sys);
-                dump_count++;
+        if (vis_enabled && vis_count < vis_max && current_step >= vis_start) {
+            if ((current_step - vis_start) % vis_skip == 0) {
+                dump_cells(vis_dir, current_step, c_sys);
+                if (vis_particle) {
+                    dump_particles(vis_dir, current_step, p_sys);
+                }
+                vis_count++;
             }
         }
     }
 
     // =========================================================================
-    // Final Result Dump (mandatory for evaluation)
+    // Final Result Dump (mandatory - cells only)
     // =========================================================================
-    dump_final_result(output_dir, p_sys);
+    dump_final_cells(output_dir, c_sys);
 
     // =========================================================================
     // Cleanup

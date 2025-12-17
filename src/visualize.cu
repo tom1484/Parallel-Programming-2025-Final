@@ -76,6 +76,24 @@ static void dump_particle_impl(const std::string& particle_path, const std::stri
     particle_file.close();
 }
 
+void dump_cells(const std::string& output_dir, int timestep, const CellSystem& c_sys) {
+    std::ostringstream cell_path, header_info;
+    cell_path << output_dir << "/" << std::setw(8) << std::setfill('0') << timestep << "-cell.dat";
+    header_info << " at timestep " << timestep;
+
+    dump_cell_impl(cell_path.str(), header_info.str(), c_sys);
+    printf("Dumped cells: %s\n", cell_path.str().c_str());
+}
+
+void dump_particles(const std::string& output_dir, int timestep, const ParticleSystem& p_sys) {
+    std::ostringstream particle_path, header_info;
+    particle_path << output_dir << "/" << std::setw(8) << std::setfill('0') << timestep << "-particle.dat";
+    header_info << " at timestep " << timestep;
+
+    dump_particle_impl(particle_path.str(), header_info.str(), p_sys);
+    printf("Dumped particles: %s\n", particle_path.str().c_str());
+}
+
 void dump_simulation(const std::string& output_dir, int timestep, const ParticleSystem& p_sys,
                      const CellSystem& c_sys) {
     std::ostringstream cell_path, particle_path, header_info;
@@ -88,8 +106,8 @@ void dump_simulation(const std::string& output_dir, int timestep, const Particle
     printf("Dumped timestep %d: %s, %s\n", timestep, cell_path.str().c_str(), particle_path.str().c_str());
 }
 
-void dump_final_result(const std::string& output_dir, const ParticleSystem& p_sys) {
-    std::string particle_path = output_dir + "/particle.dat";
-    dump_particle_impl(particle_path, " (final)", p_sys);
-    printf("Dumped final result: %s\n", particle_path.c_str());
+void dump_final_cells(const std::string& output_dir, const CellSystem& c_sys) {
+    std::string cell_path = output_dir + "/cell.dat";
+    dump_cell_impl(cell_path, " (final)", c_sys);
+    printf("Dumped final cells: %s\n", cell_path.c_str());
 }
