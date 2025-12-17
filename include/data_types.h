@@ -65,6 +65,7 @@ struct CellSystem {
     int total_cells;
 
     int* d_write_offsets;        // Pre-allocated for scatter kernel
+    int* d_inactive_write_idx;   // Write index for inactive particles (single int on device)
     void* d_temp_storage;        // Pre-allocated for CUB scan
     size_t temp_storage_bytes;   // Size of CUB temp storage
 

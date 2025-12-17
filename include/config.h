@@ -15,6 +15,9 @@
 #define MAX_PARTICLES_PER_CELL 128
 #define MAX_SUB_CELLS 36
 
+// Special cell ID to mark inactive particles (not processed by physics)
+#define INACTIVE_CELL_ID (-1)
+
 // Precision abstraction
 typedef double2 PositionType;  // Paper uses double for position [cite: 172]
 typedef float3 VelocityType;   // Paper uses float for velocity [cite: 171]

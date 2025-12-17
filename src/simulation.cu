@@ -42,6 +42,7 @@ void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& 
     CHECK_CUDA(cudaMalloc(&c_sys.d_cell_particle_count, c_sys.total_cells * sizeof(int)));
     CHECK_CUDA(cudaMalloc(&c_sys.d_cell_offset, c_sys.total_cells * sizeof(int)));
     CHECK_CUDA(cudaMalloc(&c_sys.d_write_offsets, c_sys.total_cells * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&c_sys.d_inactive_write_idx, sizeof(int)));  // Single int for inactive particle write index
 
     // Velocity accumulator arrays for macroscopic sampling
     CHECK_CUDA(cudaMalloc(&c_sys.d_vel_sum_x, c_sys.total_cells * sizeof(float)));
@@ -188,6 +189,7 @@ void free_system(ParticleSystem& p_sys, CellSystem& c_sys) {
     cudaFree(c_sys.d_cell_particle_count);
     cudaFree(c_sys.d_cell_offset);
     cudaFree(c_sys.d_write_offsets);
+    cudaFree(c_sys.d_inactive_write_idx);
     cudaFree(c_sys.d_temp_storage);
     cudaFree(c_sys.d_segments);
 }
