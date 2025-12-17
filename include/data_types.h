@@ -3,6 +3,22 @@
 
 #include "config.h"
 
+// Simulation parameters (passed to kernels)
+struct SimParams {
+    // Grid dimensions
+    int grid_nx;      // Number of cells in X
+    int grid_ny;      // Number of cells in Y
+    float domain_lx;  // Domain width (meters)
+    float domain_ly;  // Domain height (meters)
+
+    // Derived (computed once)
+    float cell_dx;    // Cell width
+    float cell_dy;    // Cell height
+
+    // Physics
+    float dt;         // Time step
+};
+
 struct ParticleSystem {
     // Current State (SoA)
     PositionType* d_pos;

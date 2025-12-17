@@ -15,13 +15,22 @@ __device__ void atomicAddFloat(float* address, float val) {
     } while (assumed != old);
 }
 
-__global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, float dt, int total_cells) {
+__global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimParams params) {
     // 1. Block/Thread Identity
     // Each block calculates ONE cell independently [cite: 62]
     int cell_idx = blockIdx.x;
     int tid = threadIdx.x;
 
-    if (cell_idx >= total_cells) return;
+    if (cell_idx >= c_sys.total_cells) return;
+
+    // Extract parameters
+    float dt = params.dt;
+    float dx = params.cell_dx;
+    float dy = params.cell_dy;
+    float domain_lx = params.domain_lx;
+    float domain_ly = params.domain_ly;
+    int grid_nx = params.grid_nx;
+    int grid_ny = params.grid_ny;
 
     // --- Shared Memory Allocation [cite: 93] ---
     // Declaring arrays in shared memory to hold particle data for this cell
@@ -109,7 +118,7 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, float 
         s_vel[i] = v;
 
         // Write new cell ID to global (for sorting in next step)
-        p_sys.d_cell_id[global_idx] = 0;  // new_cell;
+        p_sys.d_cell_id[global_idx] = new_cell;
     }
     __syncthreads();
 

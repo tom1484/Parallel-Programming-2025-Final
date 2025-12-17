@@ -1,10 +1,11 @@
 #include <yaml-cpp/yaml.h>
-#include <cub/cub.cuh>
 
+#include <cub/cub.cuh>
 #include <iostream>
 #include <random>
 #include <vector>
 
+#include "argparse.hpp"
 #include "config.h"
 #include "data_types.h"
 #include "kernels.h"
@@ -58,6 +59,19 @@ SimConfig load_config(const string& path) {
         exit(1);
     }
     return cfg;
+}
+
+// --- Create SimParams from SimConfig ---
+SimParams make_sim_params(const SimConfig& cfg) {
+    SimParams params;
+    params.grid_nx = cfg.grid_nx;
+    params.grid_ny = cfg.grid_ny;
+    params.domain_lx = cfg.domain_lx;
+    params.domain_ly = cfg.domain_ly;
+    params.cell_dx = cfg.domain_lx / cfg.grid_nx;
+    params.cell_dy = cfg.domain_ly / cfg.grid_ny;
+    params.dt = cfg.dt;
+    return params;
 }
 
 // --- 2. Allocation Helper ---
@@ -141,21 +155,32 @@ void init_simulation(ParticleSystem& p_sys, const SimConfig& cfg) {
 }
 
 int main(int argc, char** argv) {
-    // --- Parse Arguments ---
-    string config_path = "config.yaml";
-    if (argc > 1) {
-        config_path = argv[1];
-    } else {
-        cout << "Usage: ./dsmc_solver [config.yaml]\n";
-        cout << "Defaulting to 'config.yaml'\n";
+    // --- Argument Parser (argparse) ---
+    argparse::ArgumentParser program("dsmc_solver", "1.0");
+    program.add_argument("-c", "--config").default_value(std::string("config.yaml")).help("Path to config YAML file");
+    program.add_argument("-o", "--output").default_value(std::string("outputs")).help("Output directory for dumps");
+    program.add_argument("-d", "--dump").flag().help("Enable dumping simulation state each timestep");
+
+    try {
+        program.parse_args(argc, argv);
+    } catch (const std::exception& err) {
+        cerr << err.what() << endl;
+        cerr << program;
+        return 1;
     }
+
+    string config_path = program.get<string>("--config");
+    string output_dir = program.get<string>("--output");
+    bool dump_enabled = program.get<bool>("--dump");
+
+    cout << "Config: " << config_path << "\n";
+    cout << "Output: " << output_dir << "\n";
+    cout << "Dump:   " << (dump_enabled ? "enabled" : "disabled") << "\n";
 
     // --- Load Config ---
     SimConfig config = load_config(config_path);
-    printf("Simulation Configured: %dx%d grid, dt=%.2e, steps=%d\n",
-           config.grid_nx, config.grid_ny, config.dt, config.total_steps);
-
-    return 0;
+    printf("Simulation Configured: %dx%d grid, dt=%.2e, steps=%d\n", config.grid_nx, config.grid_ny, config.dt,
+           config.total_steps);
 
     ParticleSystem p_sys;
     CellSystem c_sys;
@@ -171,7 +196,11 @@ int main(int argc, char** argv) {
     swap(p_sys.d_vel, p_sys.d_vel_sorted);
     swap(p_sys.d_species, p_sys.d_species_sorted);
 
-    return 0;
+    printf("Total cells: %d\n", c_sys.total_cells);
+    printf("Total particles: %d\n", p_sys.total_particles);
+
+    // Create simulation parameters for kernel
+    SimParams sim_params = make_sim_params(config);
 
     // --- Time Loop ---
     printf("Starting Simulation for %d steps...\n", config.total_steps);
@@ -179,7 +208,7 @@ int main(int argc, char** argv) {
     for (int step = 0; step < config.total_steps; step++) {
         // Threads per block fixed at 64 [cite: 107]
         // Grid size = Total Cells (One block per cell) [cite: 95]
-        solve_cell_kernel<<<c_sys.total_cells, THREADS_PER_BLOCK>>>(p_sys, c_sys, config.dt, c_sys.total_cells);
+        solve_cell_kernel<<<c_sys.total_cells, THREADS_PER_BLOCK>>>(p_sys, c_sys, sim_params);
         CHECK_CUDA(cudaGetLastError());  // Catch launch errors
 
         // --- Sorting / Indexing Pipeline ---

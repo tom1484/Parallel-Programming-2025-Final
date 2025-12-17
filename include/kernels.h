@@ -9,6 +9,6 @@
 
 // Helper for atomic adds on floats (required for sampling)
 __device__ void atomicAddFloat(float* address, float val);
-__global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, float dt, int total_cells);
+__global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimParams params);
 
 #endif  // DSMC_KERNELS_H
