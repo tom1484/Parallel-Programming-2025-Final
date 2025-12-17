@@ -1,5 +1,6 @@
 #include <yaml-cpp/yaml.h>
 
+#include <sys/stat.h>
 #include <cub/cub.cuh>
 #include <iostream>
 #include <random>
@@ -232,6 +233,8 @@ int main(int argc, char** argv) {
     program.add_argument("-o", "--output").default_value(std::string("outputs")).help("Output directory for dumps");
     program.add_argument("-g", "--geometry").default_value(std::string("")).help("Path to geometry file (optional)");
     program.add_argument("-d", "--dump").flag().help("Enable dumping simulation state each timestep");
+    program.add_argument("--dump-start").default_value(0).scan<'i', int>().help("First timestep to dump (inclusive, default: 0)");
+    program.add_argument("--dump-end").default_value(100).scan<'i', int>().help("Last timestep to dump (exclusive, default: 100)");
 
     try {
         program.parse_args(argc, argv);
@@ -245,11 +248,17 @@ int main(int argc, char** argv) {
     string output_dir = program.get<string>("--output");
     string geometry_path = program.get<string>("--geometry");
     bool dump_enabled = program.get<bool>("--dump");
+    int dump_start = program.get<int>("--dump-start");
+    int dump_end = program.get<int>("--dump-end");
 
     cout << "Config: " << config_path << "\n";
     cout << "Output: " << output_dir << "\n";
     cout << "Geometry: " << (geometry_path.empty() ? "(none)" : geometry_path) << "\n";
-    cout << "Dump:   " << (dump_enabled ? "enabled" : "disabled") << "\n";
+    cout << "Dump:   " << (dump_enabled ? "enabled" : "disabled");
+    if (dump_enabled) {
+        cout << " [" << dump_start << ", " << dump_end << ")";
+    }
+    cout << "\n";
 
     // --- Load Config ---
     SimConfig config = load_config(config_path);
@@ -284,9 +293,22 @@ int main(int argc, char** argv) {
     printf("Total cells: %d\n", c_sys.total_cells);
     printf("Total particles: %d\n", p_sys.total_particles);
 
-    // Dump initial state
+    // Build visualization output directory path
+    string vis_dir = output_dir + "/visualization";
+
+    // Check if visualization directory exists (if dumping is enabled)
     if (dump_enabled) {
-        dump_simulation(output_dir, 0, p_sys, c_sys);
+        struct stat st;
+        if (stat(vis_dir.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+            cerr << "Error: Visualization directory does not exist: " << vis_dir << "\n";
+            cerr << "Please create it before running with --dump enabled.\n";
+            return 1;
+        }
+    }
+
+    // Dump initial state (if within range)
+    if (dump_enabled && 0 >= dump_start && 0 < dump_end) {
+        dump_simulation(vis_dir, 0, p_sys, c_sys);
     }
 
     // --- Time Loop ---
@@ -306,9 +328,9 @@ int main(int argc, char** argv) {
         swap(p_sys.d_vel, p_sys.d_vel_sorted);
         swap(p_sys.d_species, p_sys.d_species_sorted);
 
-        // Dump state after this timestep
-        if (dump_enabled) {
-            dump_simulation(output_dir, step + 1, p_sys, c_sys);
+        // Dump state after this timestep (if within range)
+        if (dump_enabled && (step + 1) >= dump_start && (step + 1) < dump_end) {
+            dump_simulation(vis_dir, step + 1, p_sys, c_sys);
         }
     }
 
