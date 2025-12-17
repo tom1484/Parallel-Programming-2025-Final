@@ -5,6 +5,7 @@ srun -A ACD114118 \
     --gpus-per-node=1 \
     --time=00:03:00 \
     ./build/Release/dsmc_solver \
-    -c assets/testcases/case-$1.yaml \
+    -c assets/testcases/case-00.yaml \
     -o outputs/test \
+    -g assets/testcases/circle-test.dat \
     --dump

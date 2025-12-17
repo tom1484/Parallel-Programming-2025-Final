@@ -1,0 +1,4 @@
+python scripts/geometry/circle.py \
+    -o assets/testcases/geometry/circle-00.dat \
+    --nx 20 --ny 20 --lx 0.3 --ly 0.3 \
+    --cx 0.15 --cy 0.15 --radius 0.05

@@ -2,4 +2,5 @@ python3 scripts/visualize.py \
     -i outputs/test \
     -o outputs/test/simulation.gif \
     -c assets/testcases/case-00.yaml \
-    --show-grid --fps 5
+    -g assets/testcases/circle-test.dat \
+    --show-grid --fps 10
