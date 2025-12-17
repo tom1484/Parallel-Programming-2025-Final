@@ -233,8 +233,9 @@ int main(int argc, char** argv) {
     program.add_argument("-o", "--output").default_value(std::string("outputs")).help("Output directory for dumps");
     program.add_argument("-g", "--geometry").default_value(std::string("")).help("Path to geometry file (optional)");
     program.add_argument("-d", "--dump").flag().help("Enable dumping simulation state each timestep");
-    program.add_argument("--dump-start").default_value(0).scan<'i', int>().help("First timestep to dump (inclusive, default: 0)");
-    program.add_argument("--dump-end").default_value(100).scan<'i', int>().help("Last timestep to dump (exclusive, default: 100)");
+    program.add_argument("--dump-start").default_value(0).scan<'i', int>().help("First timestep to dump (default: 0)");
+    program.add_argument("--dump-max").default_value(100).scan<'i', int>().help("Maximum number of timesteps to dump (default: 100)");
+    program.add_argument("--dump-skip").default_value(1).scan<'i', int>().help("Dump every N timesteps (default: 1)");
 
     try {
         program.parse_args(argc, argv);
@@ -249,14 +250,15 @@ int main(int argc, char** argv) {
     string geometry_path = program.get<string>("--geometry");
     bool dump_enabled = program.get<bool>("--dump");
     int dump_start = program.get<int>("--dump-start");
-    int dump_end = program.get<int>("--dump-end");
+    int dump_max = program.get<int>("--dump-max");
+    int dump_skip = program.get<int>("--dump-skip");
 
     cout << "Config: " << config_path << "\n";
     cout << "Output: " << output_dir << "\n";
     cout << "Geometry: " << (geometry_path.empty() ? "(none)" : geometry_path) << "\n";
     cout << "Dump:   " << (dump_enabled ? "enabled" : "disabled");
     if (dump_enabled) {
-        cout << " [" << dump_start << ", " << dump_end << ")";
+        cout << " (start=" << dump_start << ", max=" << dump_max << ", skip=" << dump_skip << ")";
     }
     cout << "\n";
 
@@ -306,9 +308,13 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Dump initial state (if within range)
-    if (dump_enabled && 0 >= dump_start && 0 < dump_end) {
+    // Dump counter for tracking how many dumps have been made
+    int dump_count = 0;
+
+    // Dump initial state (timestep 0)
+    if (dump_enabled && dump_start == 0 && dump_count < dump_max) {
         dump_simulation(vis_dir, 0, p_sys, c_sys);
+        dump_count++;
     }
 
     // --- Time Loop ---
@@ -328,9 +334,15 @@ int main(int argc, char** argv) {
         swap(p_sys.d_vel, p_sys.d_vel_sorted);
         swap(p_sys.d_species, p_sys.d_species_sorted);
 
-        // Dump state after this timestep (if within range)
-        if (dump_enabled && (step + 1) >= dump_start && (step + 1) < dump_end) {
-            dump_simulation(vis_dir, step + 1, p_sys, c_sys);
+        // Dump state after this timestep
+        // Condition: dump enabled, within max count, at or past start, and on skip interval
+        int current_step = step + 1;
+        if (dump_enabled && dump_count < dump_max && current_step >= dump_start) {
+            // Check if this step is on the skip interval (relative to dump_start)
+            if ((current_step - dump_start) % dump_skip == 0) {
+                dump_simulation(vis_dir, current_step, p_sys, c_sys);
+                dump_count++;
+            }
         }
     }
 
