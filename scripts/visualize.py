@@ -40,6 +40,12 @@ def parse_args():
         help="Config YAML file to read domain dimensions (optional)"
     )
     parser.add_argument(
+        "-g", "--geometry",
+        type=str,
+        default=None,
+        help="Geometry file (.dat) containing solid object segments (optional)"
+    )
+    parser.add_argument(
         "--fps",
         type=int,
         default=10,
@@ -101,6 +107,51 @@ def load_cell_data(filepath):
     }
 
 
+def load_segments(geometry_path):
+    """Load segment data from geometry .dat file."""
+    if geometry_path is None or not os.path.exists(geometry_path):
+        return None
+    
+    try:
+        segments = []
+        with open(geometry_path, "r") as f:
+            # Skip header line (nx ny lx ly)
+            header = f.readline()
+            
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 7:
+                    segments.append({
+                        "cell_id": int(parts[0]),
+                        "start_x": float(parts[1]),
+                        "start_y": float(parts[2]),
+                        "end_x": float(parts[3]),
+                        "end_y": float(parts[4]),
+                        "normal_x": float(parts[5]),
+                        "normal_y": float(parts[6]),
+                    })
+        
+        if not segments:
+            return None
+        
+        # Convert to numpy arrays
+        return {
+            "cell_id": np.array([s["cell_id"] for s in segments]),
+            "start_x": np.array([s["start_x"] for s in segments]),
+            "start_y": np.array([s["start_y"] for s in segments]),
+            "end_x": np.array([s["end_x"] for s in segments]),
+            "end_y": np.array([s["end_y"] for s in segments]),
+            "normal_x": np.array([s["normal_x"] for s in segments]),
+            "normal_y": np.array([s["normal_y"] for s in segments]),
+        }
+    except Exception as e:
+        print(f"Warning: Could not load geometry file: {e}")
+        return None
+
+
 def find_timesteps(input_dir):
     """Find all timesteps in the input directory."""
     pattern = os.path.join(input_dir, "*-particle.dat")
@@ -155,7 +206,7 @@ def infer_domain(particles_list):
     }
 
 
-def create_animation(input_dir, output_file, config=None, fps=10, dpi=100,
+def create_animation(input_dir, output_file, config=None, geometry=None, fps=10, dpi=100,
                      show_grid=False, show_velocity=False, color_by="speed"):
     """Create GIF animation from dump files."""
     
@@ -200,6 +251,11 @@ def create_animation(input_dir, output_file, config=None, fps=10, dpi=100,
         all_speeds.extend(speeds)
     speed_min, speed_max = min(all_speeds), max(all_speeds)
     
+    # Load segments (static geometry)
+    segments = load_segments(geometry)
+    if segments is not None:
+        print(f"Loaded {len(segments['cell_id'])} segments from geometry file")
+    
     # Create figure
     fig, ax = plt.subplots(figsize=(8, 8))
     
@@ -217,6 +273,15 @@ def create_animation(input_dir, output_file, config=None, fps=10, dpi=100,
                 ax.axvline(i * dx, color="gray", linewidth=0.5, alpha=0.5)
             for j in range(ny + 1):
                 ax.axhline(j * dy, color="gray", linewidth=0.5, alpha=0.5)
+        
+        # Draw segments (solid objects)
+        if segments is not None:
+            for i in range(len(segments["cell_id"])):
+                ax.plot(
+                    [segments["start_x"][i], segments["end_x"][i]],
+                    [segments["start_y"][i], segments["end_y"][i]],
+                    color="black", linewidth=2, solid_capstyle="round"
+                )
         
         # Determine colors
         if color_by == "speed":
@@ -281,6 +346,7 @@ def main():
         input_dir=args.input,
         output_file=args.output,
         config=args.config,
+        geometry=args.geometry,
         fps=args.fps,
         dpi=args.dpi,
         show_grid=args.show_grid,

@@ -31,6 +31,7 @@ add_executable(dsmc_solver
     src/kernels.cu
     src/sorting.cu
     src/visualize.cu
+    src/geometry.cu
 )
 
 target_include_directories(dsmc_solver PRIVATE

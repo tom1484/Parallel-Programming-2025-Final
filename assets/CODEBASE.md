@@ -20,6 +20,7 @@ final-dsmc/
 │   ├── config.h            # Hardware constants and type definitions
 │   ├── data_types.h        # Core data structures
 │   ├── kernels.h           # Physics kernel declarations
+│   ├── geometry.h          # Geometry loading declarations
 │   ├── sorting.h           # Sorting pipeline declarations
 │   ├── utils.cuh           # CUDA utility macros
 │   └── visualize.h         # Visualization/dump interface
@@ -27,6 +28,7 @@ final-dsmc/
 │   ├── main.cu             # Entry point, orchestration, memory management
 │   ├── kernels.cu          # Physics kernel implementation
 │   ├── sorting.cu          # Counting sort implementation
+│   ├── geometry.cu         # Solid object geometry loading
 │   └── visualize.cu        # Data dump implementation
 ├── scripts/                # Utility scripts
 │   ├── configure           # CMake configuration script
@@ -90,6 +92,17 @@ struct ParticleSystem {
 };
 ```
 
+#### `Segment`
+Line segment for solid object boundaries (particle-wall collisions):
+```cpp
+struct Segment {
+    float start_x, start_y;   // Segment start point
+    float end_x, end_y;       // Segment end point
+    float normal_x, normal_y; // Outward normal (normalized)
+    int exists;               // Whether this cell has a segment (0 or 1)
+};
+```
+
 #### `CellSystem`
 Per-cell data and sorting workspace:
 ```cpp
@@ -104,8 +117,23 @@ struct CellSystem {
     void* d_temp_storage;       // CUB workspace (pre-allocated)
     size_t temp_storage_bytes;
     
+    // Solid object geometry
+    Segment* d_segments;        // Array of segments, one per cell
+    
     int total_cells;
 };
+```
+
+---
+
+### `geometry.h`
+Solid object geometry loading interface:
+```cpp
+// Load geometry from a .dat file
+bool load_geometry(const std::string& path, CellSystem& c_sys, const SimParams& params);
+
+// Initialize all segments to non-existent (no geometry)
+void init_empty_geometry(CellSystem& c_sys);
 ```
 
 ---
@@ -158,6 +186,7 @@ CUDA error checking macro:
    - `-c, --config`: Path to YAML config file
    - `-o, --output`: Output directory for dumps
    - `-d, --dump`: Enable per-timestep dumps
+   - `-g, --geometry`: Path to geometry file (optional)
 
 2. **Configuration Loading**: Reads YAML file into `SimConfig` struct
 
@@ -167,7 +196,9 @@ CUDA error checking macro:
 
 4. **Initialization**: Seeds particles with random positions and Maxwellian velocities
 
-5. **Simulation Loop**:
+5. **Geometry Loading**: If geometry file provided, loads segment data and uploads to GPU
+
+6. **Simulation Loop**:
    ```
    for each timestep:
        1. Launch solve_cell_kernel (physics)
@@ -176,7 +207,7 @@ CUDA error checking macro:
        4. Optionally dump state
    ```
 
-6. **Cleanup**: Frees all GPU memory
+7. **Cleanup**: Frees all GPU memory
 
 ---
 
@@ -189,14 +220,34 @@ CUDA error checking macro:
 3. **Collision**: NTC method (placeholder - to be implemented)
 4. **Sampling**: Accumulate macroscopic properties (placeholder)
 5. **Movement**: Update positions using `p += v * dt`
-6. **Boundary**: Reflective walls (bounce particles back into domain)
-7. **Re-locate**: Calculate new cell ID based on updated position
-8. **Store**: Write back to global memory
+6. **Segment Collision**: If cell has a segment, check ray-segment intersection and apply specular reflection
+7. **Boundary**: Reflective walls (bounce particles back into domain)
+8. **Re-locate**: Calculate new cell ID based on updated position
+9. **Store**: Write back to global memory
 
 **Key Implementation Details:**
 - Uses `__shared__` arrays for particle data (reduces global memory latency)
 - Calculates new `cell_id` from position: `cell = cy * grid_nx + cx`
 - Clamps positions and cell indices to valid domain
+- Segment collision uses parametric ray-segment intersection with specular reflection: `v' = v - 2(v·n)n`
+
+---
+
+### `geometry.cu`
+**Solid object geometry loading.** Parses `.dat` files and uploads segment data to GPU.
+
+**File Format:**
+```
+# Header line (must match simulation config)
+nx ny lx ly
+# Segment definitions: cell_id start_x start_y end_x end_y normal_x normal_y
+15 0.10 0.15 0.15 0.15 0.0 -1.0
+16 0.15 0.15 0.15 0.10 1.0 0.0
+```
+
+**Functions:**
+- `load_geometry()`: Parses file, validates grid dimensions, uploads to `d_segments`
+- `init_empty_geometry()`: Sets all segments to `exists = 0` (no geometry)
 
 ---
 
@@ -242,6 +293,7 @@ python scripts/visualize.py -i outputs/test -o animation.gif [options]
 | `-i, --input` | Input directory with dump files |
 | `-o, --output` | Output GIF filename |
 | `-c, --config` | YAML config for domain dimensions |
+| `-g, --geometry` | Geometry file (.dat) for solid object segments |
 | `--fps` | Frames per second |
 | `--show-grid` | Draw cell grid lines |
 | `--show-velocity` | Draw velocity vectors |
@@ -262,6 +314,9 @@ cmake --build build/Release
 
 # Run
 ./build/Release/dsmc_solver -c assets/testcases/case-00.yaml -d -o outputs/test
+
+# Run with geometry
+./build/Release/dsmc_solver -c assets/testcases/case-00.yaml -g assets/testcases/segment-test.dat -d -o outputs/test
 ```
 
 **Dependencies:**

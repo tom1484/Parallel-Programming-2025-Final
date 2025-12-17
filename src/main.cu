@@ -8,6 +8,7 @@
 #include "argparse.hpp"
 #include "config.h"
 #include "data_types.h"
+#include "geometry.h"
 #include "kernels.h"
 #include "sorting.h"
 #include "utils.cuh"
@@ -17,15 +18,15 @@ using namespace std;
 
 // --- Simulation Settings Container ---
 struct SimConfig {
+    // Simulation
+    float dt;  // dt
+    int total_steps;
+
     // Grid
     int grid_nx;      // Number of cells X
     int grid_ny;      // Number of cells Y
     float domain_lx;  // Domain width (meters)
     float domain_ly;  // Domain height (meters)
-
-    // Physics
-    float dt;  // dt
-    int total_steps;
 
     // Initialization
     float init_temp;        // Kelvin
@@ -115,6 +116,9 @@ void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& 
                                   c_sys.d_cell_offset, c_sys.total_cells);
     CHECK_CUDA(cudaMalloc(&c_sys.d_temp_storage, c_sys.temp_storage_bytes));
 
+    // Allocate segment array for solid objects
+    CHECK_CUDA(cudaMalloc(&c_sys.d_segments, c_sys.total_cells * sizeof(Segment)));
+
     printf("Allocated System: %d cells, capacity for %d particles.\n", c_sys.total_cells, buffer_size);
 }
 
@@ -162,6 +166,7 @@ int main(int argc, char** argv) {
     argparse::ArgumentParser program("dsmc_solver", "1.0");
     program.add_argument("-c", "--config").default_value(std::string("config.yaml")).help("Path to config YAML file");
     program.add_argument("-o", "--output").default_value(std::string("outputs")).help("Output directory for dumps");
+    program.add_argument("-g", "--geometry").default_value(std::string("")).help("Path to geometry file (optional)");
     program.add_argument("-d", "--dump").flag().help("Enable dumping simulation state each timestep");
 
     try {
@@ -174,10 +179,12 @@ int main(int argc, char** argv) {
 
     string config_path = program.get<string>("--config");
     string output_dir = program.get<string>("--output");
+    string geometry_path = program.get<string>("--geometry");
     bool dump_enabled = program.get<bool>("--dump");
 
     cout << "Config: " << config_path << "\n";
     cout << "Output: " << output_dir << "\n";
+    cout << "Geometry: " << (geometry_path.empty() ? "(none)" : geometry_path) << "\n";
     cout << "Dump:   " << (dump_enabled ? "enabled" : "disabled") << "\n";
 
     // --- Load Config ---
@@ -190,6 +197,17 @@ int main(int argc, char** argv) {
 
     // --- Setup ---
     allocate_system(p_sys, c_sys, config);
+
+    // Create simulation parameters for kernel (needed for geometry loading)
+    SimParams sim_params = make_sim_params(config);
+
+    // Load geometry (or initialize empty)
+    if (!geometry_path.empty()) {
+        load_geometry(geometry_path, c_sys, sim_params);
+    } else {
+        init_empty_geometry(c_sys);
+    }
+
     init_simulation(p_sys, config);
 
     // Initial Sort to ensure memory Coalescing before first step
@@ -201,9 +219,6 @@ int main(int argc, char** argv) {
 
     printf("Total cells: %d\n", c_sys.total_cells);
     printf("Total particles: %d\n", p_sys.total_particles);
-
-    // Create simulation parameters for kernel
-    SimParams sim_params = make_sim_params(config);
 
     // Dump initial state
     if (dump_enabled) {
@@ -245,6 +260,7 @@ int main(int argc, char** argv) {
     cudaFree(c_sys.d_cell_offset);
     cudaFree(c_sys.d_write_offsets);
     cudaFree(c_sys.d_temp_storage);
+    cudaFree(c_sys.d_segments);
 
     return 0;
 }
