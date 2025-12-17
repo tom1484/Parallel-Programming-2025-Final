@@ -1,6 +1,0 @@
-python3 scripts/visualize.py \
-    -i outputs/test/visualization \
-    -o outputs/test/simulation.gif \
-    -c assets/testcases/case-00/config.yaml \
-    -g assets/testcases/case-00/geometry/circle.dat \
-    --show-grid --fps 10
