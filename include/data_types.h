@@ -9,6 +9,7 @@ struct Segment {
     float end_x, end_y;       // Segment end point
     float normal_x, normal_y; // Outward normal (should be normalized)
     int exists;               // Whether this cell has a segment (0 or 1)
+    int inside;               // Whether this cell is inside a solid object (0 or 1)
 };
 
 // Simulation parameters (passed to kernels)

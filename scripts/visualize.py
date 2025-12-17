@@ -114,25 +114,45 @@ def load_segments(geometry_path):
     
     try:
         segments = []
+        inside_cells = []
         with open(geometry_path, "r") as f:
-            # Skip header line (nx ny lx ly)
-            header = f.readline()
+            header_read = False
             
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
+                
                 parts = line.split()
-                if len(parts) >= 7:
+                
+                # First non-comment line is header: nx ny lx ly
+                if not header_read:
+                    header_read = True
+                    continue
+                
+                # Format: cell_id type [segment_params...]
+                # type 0 = segment: cell_id 0 start_x start_y end_x end_y normal_x normal_y
+                # type 1 = inside:  cell_id 1
+                if len(parts) < 2:
+                    continue
+                
+                cell_id = int(parts[0])
+                record_type = int(parts[1])
+                
+                if record_type == 0 and len(parts) >= 8:
+                    # Segment record
                     segments.append({
-                        "cell_id": int(parts[0]),
-                        "start_x": float(parts[1]),
-                        "start_y": float(parts[2]),
-                        "end_x": float(parts[3]),
-                        "end_y": float(parts[4]),
-                        "normal_x": float(parts[5]),
-                        "normal_y": float(parts[6]),
+                        "cell_id": cell_id,
+                        "start_x": float(parts[2]),
+                        "start_y": float(parts[3]),
+                        "end_x": float(parts[4]),
+                        "end_y": float(parts[5]),
+                        "normal_x": float(parts[6]),
+                        "normal_y": float(parts[7]),
                     })
+                elif record_type == 1:
+                    # Inside cell record
+                    inside_cells.append(cell_id)
         
         if not segments:
             return None
@@ -146,6 +166,7 @@ def load_segments(geometry_path):
             "end_y": np.array([s["end_y"] for s in segments]),
             "normal_x": np.array([s["normal_x"] for s in segments]),
             "normal_y": np.array([s["normal_y"] for s in segments]),
+            "inside_cells": np.array(inside_cells) if inside_cells else np.array([], dtype=int),
         }
     except Exception as e:
         print(f"Warning: Could not load geometry file: {e}")

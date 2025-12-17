@@ -100,6 +100,7 @@ struct Segment {
     float end_x, end_y;       // Segment end point
     float normal_x, normal_y; // Outward normal (normalized)
     int exists;               // Whether this cell has a segment (0 or 1)
+    int inside;               // Whether this cell is inside a solid object (0 or 1)
 };
 ```
 
@@ -240,14 +241,22 @@ CUDA error checking macro:
 ```
 # Header line (must match simulation config)
 nx ny lx ly
-# Segment definitions: cell_id start_x start_y end_x end_y normal_x normal_y
-15 0.10 0.15 0.15 0.15 0.0 -1.0
-16 0.15 0.15 0.15 0.10 1.0 0.0
+# Record format: cell_id type [segment_params...]
+# type 0 = segment: cell_id 0 start_x start_y end_x end_y normal_x normal_y
+# type 1 = inside:  cell_id 1 (cell is inside solid object, no particles allowed)
+15 0 0.10 0.15 0.15 0.15 0.0 -1.0
+16 0 0.15 0.15 0.15 0.10 1.0 0.0
+25 1
+26 1
 ```
+
+**Record Types:**
+- `type 0` (segment): Defines a boundary segment with start/end points and outward normal
+- `type 1` (inside): Marks the cell as being inside a solid object (particles should not exist here)
 
 **Functions:**
 - `load_geometry()`: Parses file, validates grid dimensions, uploads to `d_segments`
-- `init_empty_geometry()`: Sets all segments to `exists = 0` (no geometry)
+- `init_empty_geometry()`: Sets all segments to `exists = 0` and `inside = 0` (no geometry)
 
 ---
 

@@ -100,6 +100,10 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
 
     if (cell_idx >= c_sys.total_cells) return;
 
+    // Skip cells that are entirely inside solid objects
+    // (particles should not exist in these cells)
+    if (c_sys.d_segments[cell_idx].inside) return;
+
     // Extract parameters
     float dt = params.dt;
     float dx = params.cell_dx;

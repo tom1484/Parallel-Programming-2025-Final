@@ -123,7 +123,41 @@ void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& 
 }
 
 // --- 3. Initialization Helper (Host Side) ---
-void init_simulation(ParticleSystem& p_sys, const SimConfig& cfg) {
+
+// Check if a point is inside a solid object based on segment normal
+// Returns true if the point is on the "inside" (opposite to normal) side of the segment
+static bool is_inside_segment(double px, double py, const Segment& seg) {
+    if (!seg.exists) return false;
+    
+    // Vector from segment start to point
+    float dx = (float)px - seg.start_x;
+    float dy = (float)py - seg.start_y;
+    
+    // Dot product with outward normal
+    // If negative, point is on the inside (opposite to normal direction)
+    float dot = dx * seg.normal_x + dy * seg.normal_y;
+    
+    return dot < 0.0f;
+}
+
+void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimConfig& cfg) {
+    // Copy segment data from GPU to check for inside cells
+    vector<Segment> h_segments(c_sys.total_cells);
+    CHECK_CUDA(cudaMemcpy(h_segments.data(), c_sys.d_segments,
+                          c_sys.total_cells * sizeof(Segment), cudaMemcpyDeviceToHost));
+
+    // Count inside cells and segment cells for info
+    int inside_count = 0;
+    int segment_count = 0;
+    for (int i = 0; i < c_sys.total_cells; i++) {
+        if (h_segments[i].inside) inside_count++;
+        if (h_segments[i].exists) segment_count++;
+    }
+    if (inside_count > 0 || segment_count > 0) {
+        printf("Initialization: Avoiding %d inside cells and checking %d segment cells\n", 
+               inside_count, segment_count);
+    }
+
     vector<PositionType> h_pos(p_sys.total_particles);
     vector<VelocityType> h_vel(p_sys.total_particles);
     vector<int> h_cell_id(p_sys.total_particles);
@@ -137,16 +171,46 @@ void init_simulation(ParticleSystem& p_sys, const SimConfig& cfg) {
     float dy = cfg.domain_ly / cfg.grid_ny;
 
     for (int i = 0; i < p_sys.total_particles; i++) {
-        // Random Position
-        h_pos[i] = make_double2(dist_x(gen), dist_y(gen));
+        // Generate random position, rejecting positions inside solid objects
+        int cell_id;
+        double px, py;
+        int attempts = 0;
+        const int max_attempts = 1000;
+        bool is_valid;
+
+        do {
+            px = dist_x(gen);
+            py = dist_y(gen);
+            int cx = (int)(px / dx);
+            int cy = (int)(py / dy);
+            // Clamp to valid range
+            cx = max(0, min(cx, cfg.grid_nx - 1));
+            cy = max(0, min(cy, cfg.grid_ny - 1));
+            cell_id = cy * cfg.grid_nx + cx;
+            
+            // Check if position is valid:
+            // 1. Not in a cell marked as completely inside
+            // 2. Not on the inside of a segment (if cell has one)
+            is_valid = !h_segments[cell_id].inside && 
+                       !is_inside_segment(px, py, h_segments[cell_id]);
+            
+            attempts++;
+        } while (!is_valid && attempts < max_attempts);
+
+        if (attempts >= max_attempts) {
+            // Fallback: place at domain corner (should not happen in practice)
+            px = 0.0;
+            py = 0.0;
+            cell_id = 0;
+        }
+
+        h_pos[i] = make_double2(px, py);
 
         // Maxwellian Velocity
         h_vel[i] = make_float3(dist_v(gen), dist_v(gen), 0.0f);
 
-        // Calculate Initial Cell ID
-        int cx = (int)(h_pos[i].x / dx);
-        int cy = (int)(h_pos[i].y / dy);
-        h_cell_id[i] = cy * cfg.grid_nx + cx;
+        // Store cell ID
+        h_cell_id[i] = cell_id;
     }
 
     // Copy to GPU
@@ -208,7 +272,7 @@ int main(int argc, char** argv) {
         init_empty_geometry(c_sys);
     }
 
-    init_simulation(p_sys, config);
+    init_simulation(p_sys, c_sys, config);
 
     // Initial Sort to ensure memory Coalescing before first step
     // (Particles generated randomly on CPU are not sorted by cell)

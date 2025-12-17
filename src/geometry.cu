@@ -16,6 +16,7 @@ void init_empty_geometry(CellSystem& c_sys) {
     std::vector<Segment> h_segments(c_sys.total_cells);
     for (int i = 0; i < c_sys.total_cells; i++) {
         h_segments[i].exists = 0;
+        h_segments[i].inside = 0;
         h_segments[i].start_x = 0.0f;
         h_segments[i].start_y = 0.0f;
         h_segments[i].end_x = 0.0f;
@@ -39,6 +40,7 @@ bool load_geometry(const std::string& path, CellSystem& c_sys, const SimParams& 
     std::vector<Segment> h_segments(c_sys.total_cells);
     for (int i = 0; i < c_sys.total_cells; i++) {
         h_segments[i].exists = 0;
+        h_segments[i].inside = 0;
     }
 
     std::string line;
@@ -82,12 +84,13 @@ bool load_geometry(const std::string& path, CellSystem& c_sys, const SimParams& 
             continue;
         }
 
-        // Parse segment line: cell_id start_x start_y end_x end_y normal_x normal_y
-        int cell_id;
-        float start_x, start_y, end_x, end_y, normal_x, normal_y;
+        // Parse line: cell_id type [segment_params...]
+        // type 0 = segment: cell_id 0 start_x start_y end_x end_y normal_x normal_y
+        // type 1 = inside:  cell_id 1
+        int cell_id, type;
 
-        if (!(iss >> cell_id >> start_x >> start_y >> end_x >> end_y >> normal_x >> normal_y)) {
-            fprintf(stderr, "Error: Invalid segment format at line %d\n", line_num);
+        if (!(iss >> cell_id >> type)) {
+            fprintf(stderr, "Error: Invalid format at line %d (expected cell_id type)\n", line_num);
             continue;
         }
 
@@ -95,6 +98,22 @@ bool load_geometry(const std::string& path, CellSystem& c_sys, const SimParams& 
         if (cell_id < 0 || cell_id >= c_sys.total_cells) {
             fprintf(stderr, "Error: Invalid cell_id %d at line %d (max: %d)\n",
                     cell_id, line_num, c_sys.total_cells - 1);
+            continue;
+        }
+
+        if (type == 1) {
+            // Cell is inside a solid object
+            h_segments[cell_id].inside = 1;
+            continue;
+        } else if (type != 0) {
+            fprintf(stderr, "Error: Invalid type %d at line %d (expected 0 or 1)\n", type, line_num);
+            continue;
+        }
+
+        // type == 0: Parse segment parameters
+        float start_x, start_y, end_x, end_y, normal_x, normal_y;
+        if (!(iss >> start_x >> start_y >> end_x >> end_y >> normal_x >> normal_y)) {
+            fprintf(stderr, "Error: Invalid segment format at line %d\n", line_num);
             continue;
         }
 
@@ -117,12 +136,14 @@ bool load_geometry(const std::string& path, CellSystem& c_sys, const SimParams& 
 
     file.close();
 
-    // Count segments for info
+    // Count segments and inside cells for info
     int seg_count = 0;
+    int inside_count = 0;
     for (int i = 0; i < c_sys.total_cells; i++) {
         if (h_segments[i].exists) seg_count++;
+        if (h_segments[i].inside) inside_count++;
     }
-    printf("Loaded geometry from %s: %d segments\n", path.c_str(), seg_count);
+    printf("Loaded geometry from %s: %d segments, %d inside cells\n", path.c_str(), seg_count, inside_count);
 
     // Upload to GPU
     CHECK_CUDA(cudaMemcpy(c_sys.d_segments, h_segments.data(),
