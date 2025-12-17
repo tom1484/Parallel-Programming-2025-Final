@@ -4,4 +4,5 @@ outputs/
 __pycache__/
 
 assets/**/geometry/
+assets/**/source/*.dat
 scripts/test/
