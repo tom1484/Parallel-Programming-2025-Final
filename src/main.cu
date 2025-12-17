@@ -111,9 +111,8 @@ void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& 
     // Pre-allocate CUB temp storage (query size first)
     c_sys.d_temp_storage = nullptr;
     c_sys.temp_storage_bytes = 0;
-    cub::DeviceScan::ExclusiveSum(
-        c_sys.d_temp_storage, c_sys.temp_storage_bytes,
-        c_sys.d_cell_particle_count, c_sys.d_cell_offset, c_sys.total_cells);
+    cub::DeviceScan::ExclusiveSum(c_sys.d_temp_storage, c_sys.temp_storage_bytes, c_sys.d_cell_particle_count,
+                                  c_sys.d_cell_offset, c_sys.total_cells);
     CHECK_CUDA(cudaMalloc(&c_sys.d_temp_storage, c_sys.temp_storage_bytes));
 
     printf("Allocated System: %d cells, capacity for %d particles.\n", c_sys.total_cells, buffer_size);
@@ -147,9 +146,12 @@ void init_simulation(ParticleSystem& p_sys, const SimConfig& cfg) {
     }
 
     // Copy to GPU
-    CHECK_CUDA(cudaMemcpy(p_sys.d_pos, h_pos.data(), p_sys.total_particles * sizeof(PositionType), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(p_sys.d_vel, h_vel.data(), p_sys.total_particles * sizeof(VelocityType), cudaMemcpyHostToDevice));
-    CHECK_CUDA(cudaMemcpy(p_sys.d_cell_id, h_cell_id.data(), p_sys.total_particles * sizeof(int), cudaMemcpyHostToDevice));
+    CHECK_CUDA(
+        cudaMemcpy(p_sys.d_pos, h_pos.data(), p_sys.total_particles * sizeof(PositionType), cudaMemcpyHostToDevice));
+    CHECK_CUDA(
+        cudaMemcpy(p_sys.d_vel, h_vel.data(), p_sys.total_particles * sizeof(VelocityType), cudaMemcpyHostToDevice));
+    CHECK_CUDA(
+        cudaMemcpy(p_sys.d_cell_id, h_cell_id.data(), p_sys.total_particles * sizeof(int), cudaMemcpyHostToDevice));
 
     // Initialize species to 0 (single species simulation)
     CHECK_CUDA(cudaMemset(p_sys.d_species, 0, p_sys.total_particles * sizeof(int)));

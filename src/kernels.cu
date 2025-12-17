@@ -60,10 +60,11 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     __syncthreads();
 
     // --- Step 2: Sub-cell Indexing [cite: 113] ---
+    // TODO: Calculate Nsc based on the number of particles
     // Index particles into sub-cells for collision selection
     for (int i = tid; i < s_num_particles; i += THREADS_PER_BLOCK) {
         // Simple logic: calculate sub-cell based on position within cell
-        // (Pseudocode geometry logic)
+        // TODO: Implement actual sub-cell calculation
         int sub_idx = 0;  // calculate_sub_cell(s_pos[i]);
         s_subcell[i] = sub_idx;
     }
@@ -73,6 +74,7 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     // Each thread handles ONE sub-cell or a specific collision pair
     // Paper: "Each thread performs collision calculation for one sub-cell" [cite: 121]
     if (tid < MAX_SUB_CELLS) {
+        // TODO: Implement collision logic here
         // 1. Calculate collision pairs (NTC)
         // 2. Select candidates from shared memory (s_subcell array)
         // 3. Perform collision (GSS/VHS model)
