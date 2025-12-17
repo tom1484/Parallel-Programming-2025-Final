@@ -1,0 +1,33 @@
+# Example particle source schedule
+# total_particles: sum of all particles emitted across all scheduled timesteps
+total_particles 30
+
+# Source geometry: line segment from (start_x, start_y) to (end_x, end_y)
+# Particles emit perpendicular to the segment, in direction (dir_x, dir_y)
+start_x 0.0
+start_y 0.1
+end_x 0.0
+end_y 0.2
+dir_x 1.0
+dir_y 0.0
+
+# Thermal velocity (standard deviation in m/s)
+thermal_vel 300.0
+
+# Stream velocity (mean velocity in m/s)
+stream_vel_x 500.0
+stream_vel_y 0.0
+stream_vel_z 0.0
+
+# Schedule: timestep num_particles
+# Emit 3 particles at timestep 0, 10, 20, 30, ... 90 (10 emissions)
+0 3
+10 3
+20 3
+30 3
+40 3
+50 3
+60 3
+70 3
+80 3
+90 3

@@ -1,5 +1,6 @@
 #include <sys/stat.h>
 #include <iostream>
+#include <vector>
 
 #include "argparse.hpp"
 #include "config.h"
@@ -9,6 +10,7 @@
 #include "sim_config.h"
 #include "simulation.h"
 #include "sorting.h"
+#include "source.h"
 #include "utils.cuh"
 #include "visualize.h"
 
@@ -31,6 +33,10 @@ int main(int argc, char** argv) {
     program.add_argument("-d", "--dump")
         .flag()
         .help("Enable dumping simulation state");
+    program.add_argument("-s", "--source")
+        .append()
+        .default_value(std::vector<std::string>{})
+        .help("Path to source schedule file (can be specified multiple times)");
     program.add_argument("--dump-start")
         .default_value(0)
         .scan<'i', int>()
@@ -56,6 +62,7 @@ int main(int argc, char** argv) {
     string output_dir = program.get<string>("--output");
     string geometry_path = program.get<string>("--geometry");
     bool dump_enabled = program.get<bool>("--dump");
+    vector<string> source_paths = program.get<vector<string>>("--source");
     int dump_start = program.get<int>("--dump-start");
     int dump_max = program.get<int>("--dump-max");
     int dump_skip = program.get<int>("--dump-skip");
@@ -63,6 +70,10 @@ int main(int argc, char** argv) {
     cout << "Config: " << config_path << "\n";
     cout << "Output: " << output_dir << "\n";
     cout << "Geometry: " << (geometry_path.empty() ? "(none)" : geometry_path) << "\n";
+    cout << "Sources: " << source_paths.size() << " file(s)\n";
+    for (const auto& sp : source_paths) {
+        cout << "  - " << sp << "\n";
+    }
     cout << "Dump:   " << (dump_enabled ? "enabled" : "disabled");
     if (dump_enabled) {
         cout << " (start=" << dump_start << ", max=" << dump_max << ", skip=" << dump_skip << ")";
@@ -79,13 +90,35 @@ int main(int argc, char** argv) {
            config.grid_nx, config.grid_ny, config.dt, config.total_steps);
 
     // =========================================================================
+    // Source Loading
+    // =========================================================================
+    SourceSystem source_sys;
+    init_source_system(source_sys);
+
+    int total_source_particles = 0;
+    for (const auto& sp : source_paths) {
+        ParticleSource src;
+        if (load_source(sp, src)) {
+            add_source(source_sys, src);
+            total_source_particles += src.total_particles;
+            printf("Loaded source: %s (%d total particles)\n", sp.c_str(), src.total_particles);
+        } else {
+            cerr << "Warning: Failed to load source: " << sp << "\n";
+        }
+    }
+
+    // =========================================================================
     // System Setup
     // =========================================================================
     ParticleSystem p_sys;
     CellSystem c_sys;
 
-    // Allocate GPU memory
-    allocate_system(p_sys, c_sys, config);
+    // Calculate initial particle count (same formula as in allocate_system)
+    double volume = config.domain_lx * config.domain_ly;
+    int init_particles = (int)((config.init_density * volume) / config.particle_weight);
+
+    // Allocate GPU memory (with extra space for source particles)
+    allocate_system(p_sys, c_sys, config, total_source_particles);
 
     // Load geometry (or initialize empty)
     if (!geometry_path.empty()) {
@@ -94,8 +127,16 @@ int main(int argc, char** argv) {
         init_empty_geometry(c_sys);
     }
 
-    // Initialize particles
-    init_simulation(p_sys, c_sys, config);
+    // Initialize particles (only initial particles from config)
+    init_simulation(p_sys, c_sys, config, init_particles);
+
+    // Initialize source particle slots as inactive
+    if (total_source_particles > 0) {
+        init_source_particles_inactive(p_sys, init_particles, init_particles + total_source_particles);
+    }
+
+    // Setup RNG states for sources (also assigns absolute particle indices)
+    setup_source_rng(source_sys, total_source_particles, init_particles);
 
     // Initial sort to ensure memory coalescing before first step
     sort_particles(p_sys, c_sys);
@@ -140,6 +181,9 @@ int main(int argc, char** argv) {
     int reset_blocks = (c_sys.total_cells + reset_threads - 1) / reset_threads;
 
     for (int step = 0; step < config.total_steps; step++) {
+        // --- Emit Particles from Sources ---
+        emit_particles(source_sys, p_sys, c_sys, sim_params, step);
+
         // --- Reset Sampling Accumulators ---
         reset_sampling_kernel<<<reset_blocks, reset_threads>>>(c_sys);
         CHECK_CUDA(cudaGetLastError());
@@ -180,6 +224,7 @@ int main(int argc, char** argv) {
     // =========================================================================
     // Cleanup
     // =========================================================================
+    free_source_system(source_sys);
     free_system(p_sys, c_sys);
 
     printf("Simulation complete.\n");

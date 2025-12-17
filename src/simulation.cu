@@ -11,17 +11,21 @@ using namespace std;
 
 // --- Allocation ---
 
-void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& cfg) {
+void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& cfg,
+                     int extra_particles) {
     // Calculate totals
     c_sys.total_cells = cfg.grid_nx * cfg.grid_ny;
 
-    // Estimate total particles based on density and volume
-    // (In practice, allocate extra buffer for inflow)
+    // Estimate initial particles based on density and volume
     double volume = (cfg.domain_lx * cfg.domain_ly);
-    int est_particles = (int)((cfg.init_density * volume) / cfg.particle_weight);
-    int buffer_size = est_particles * 1.5;  // 50% buffer for fluctuation
+    int init_particles = (int)((cfg.init_density * volume) / cfg.particle_weight);
+    
+    // Total particles = initial + source particles
+    // Add 10% buffer for safety
+    int total_particles = init_particles + extra_particles;
+    int buffer_size = (int)(total_particles * 1.1);
 
-    p_sys.total_particles = est_particles;
+    p_sys.total_particles = total_particles;  // Total including source particles
 
     // --- GPU Allocations (Particle System) ---
     // Note: We use Double Precision for Position [cite: 173]
@@ -81,7 +85,7 @@ static bool is_inside_segment(double px, double py, const Segment& seg) {
     return dot < 0.0f;
 }
 
-void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimConfig& cfg) {
+void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimConfig& cfg, int num_initial_particles) {
     // Copy segment data from GPU to check for inside cells
     vector<Segment> h_segments(c_sys.total_cells);
     CHECK_CUDA(cudaMemcpy(h_segments.data(), c_sys.d_segments,
@@ -99,9 +103,10 @@ void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimCo
                inside_count, segment_count);
     }
 
-    vector<PositionType> h_pos(p_sys.total_particles);
-    vector<VelocityType> h_vel(p_sys.total_particles);
-    vector<int> h_cell_id(p_sys.total_particles);
+    // Only initialize the initial particles, not source particles
+    vector<PositionType> h_pos(num_initial_particles);
+    vector<VelocityType> h_vel(num_initial_particles);
+    vector<int> h_cell_id(num_initial_particles);
 
     mt19937 gen(1234);
     uniform_real_distribution<double> dist_x(0.0, cfg.domain_lx);
@@ -111,7 +116,7 @@ void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimCo
     float dx = cfg.domain_lx / cfg.grid_nx;
     float dy = cfg.domain_ly / cfg.grid_ny;
 
-    for (int i = 0; i < p_sys.total_particles; i++) {
+    for (int i = 0; i < num_initial_particles; i++) {
         // Generate random position, rejecting positions inside solid objects
         int cell_id;
         double px, py;
@@ -154,16 +159,37 @@ void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimCo
         h_cell_id[i] = cell_id;
     }
 
-    // Copy to GPU
+    // Copy to GPU (only for initial particles)
     CHECK_CUDA(
-        cudaMemcpy(p_sys.d_pos, h_pos.data(), p_sys.total_particles * sizeof(PositionType), cudaMemcpyHostToDevice));
+        cudaMemcpy(p_sys.d_pos, h_pos.data(), num_initial_particles * sizeof(PositionType), cudaMemcpyHostToDevice));
     CHECK_CUDA(
-        cudaMemcpy(p_sys.d_vel, h_vel.data(), p_sys.total_particles * sizeof(VelocityType), cudaMemcpyHostToDevice));
+        cudaMemcpy(p_sys.d_vel, h_vel.data(), num_initial_particles * sizeof(VelocityType), cudaMemcpyHostToDevice));
     CHECK_CUDA(
-        cudaMemcpy(p_sys.d_cell_id, h_cell_id.data(), p_sys.total_particles * sizeof(int), cudaMemcpyHostToDevice));
+        cudaMemcpy(p_sys.d_cell_id, h_cell_id.data(), num_initial_particles * sizeof(int), cudaMemcpyHostToDevice));
 
-    // Initialize species to 0 (single species simulation)
-    CHECK_CUDA(cudaMemset(p_sys.d_species, 0, p_sys.total_particles * sizeof(int)));
+    // Initialize species to 0 for initial particles
+    CHECK_CUDA(cudaMemset(p_sys.d_species, 0, num_initial_particles * sizeof(int)));
+}
+
+// --- Initialize Source Particles as Inactive ---
+
+__global__ void init_inactive_kernel(int* d_cell_id, int start_idx, int count) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= count) return;
+    d_cell_id[start_idx + idx] = INACTIVE_CELL_ID;
+}
+
+void init_source_particles_inactive(ParticleSystem& p_sys, int init_particles, int total_particles) {
+    int source_particles = total_particles - init_particles;
+    if (source_particles <= 0) return;
+    
+    int threads = 256;
+    int blocks = (source_particles + threads - 1) / threads;
+    init_inactive_kernel<<<blocks, threads>>>(p_sys.d_cell_id, init_particles, source_particles);
+    CHECK_CUDA(cudaGetLastError());
+    
+    printf("Initialized %d source particle slots as inactive (indices %d to %d)\n",
+           source_particles, init_particles, total_particles - 1);
 }
 
 // --- Cleanup ---
