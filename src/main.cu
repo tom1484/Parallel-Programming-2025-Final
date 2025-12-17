@@ -151,8 +151,8 @@ void init_simulation(ParticleSystem& p_sys, const SimConfig& cfg) {
     CHECK_CUDA(cudaMemcpy(p_sys.d_vel, h_vel.data(), p_sys.total_particles * sizeof(VelocityType), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(p_sys.d_cell_id, h_cell_id.data(), p_sys.total_particles * sizeof(int), cudaMemcpyHostToDevice));
 
-    // Important: Initialize sorting buffers to 0 to avoid artifacts
-    CHECK_CUDA(cudaMemset(p_sys.d_cell_id, 0, p_sys.total_particles * sizeof(int)));
+    // Initialize species to 0 (single species simulation)
+    CHECK_CUDA(cudaMemset(p_sys.d_species, 0, p_sys.total_particles * sizeof(int)));
 }
 
 int main(int argc, char** argv) {
