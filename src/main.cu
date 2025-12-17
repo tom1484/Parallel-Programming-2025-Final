@@ -11,6 +11,7 @@
 #include "kernels.h"
 #include "sorting.h"
 #include "utils.cuh"
+#include "visualize.h"
 
 using namespace std;
 
@@ -202,6 +203,11 @@ int main(int argc, char** argv) {
     // Create simulation parameters for kernel
     SimParams sim_params = make_sim_params(config);
 
+    // Dump initial state
+    if (dump_enabled) {
+        dump_simulation(output_dir, 0, p_sys, c_sys);
+    }
+
     // --- Time Loop ---
     printf("Starting Simulation for %d steps...\n", config.total_steps);
 
@@ -218,6 +224,11 @@ int main(int argc, char** argv) {
         swap(p_sys.d_pos, p_sys.d_pos_sorted);
         swap(p_sys.d_vel, p_sys.d_vel_sorted);
         swap(p_sys.d_species, p_sys.d_species_sorted);
+
+        // Dump state after this timestep
+        if (dump_enabled) {
+            dump_simulation(output_dir, step + 1, p_sys, c_sys);
+        }
     }
 
     // --- Cleanup ---
