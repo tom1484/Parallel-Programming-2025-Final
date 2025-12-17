@@ -29,7 +29,11 @@ int main(int argc, char** argv) {
     program.add_argument("-s", "--source")
         .append()
         .default_value(std::vector<std::string>{})
-        .help("Path to source schedule file (can be specified multiple times)");
+        .help("Path to source config YAML file (can be specified multiple times)");
+    program.add_argument("-S", "--schedule")
+        .append()
+        .default_value(std::vector<std::string>{})
+        .help("Path to schedule .dat file (must match -s count, or use embedded schedule in source YAML)");
     program.add_argument("--dump-start").default_value(0).scan<'i', int>().help("First timestep to dump (default: 0)");
     program.add_argument("--dump-max")
         .default_value(100)
@@ -50,16 +54,28 @@ int main(int argc, char** argv) {
     string geometry_path = program.get<string>("--geometry");
     bool dump_enabled = program.get<bool>("--dump");
     vector<string> source_paths = program.get<vector<string>>("--source");
+    vector<string> schedule_paths = program.get<vector<string>>("--schedule");
     int dump_start = program.get<int>("--dump-start");
     int dump_max = program.get<int>("--dump-max");
     int dump_skip = program.get<int>("--dump-skip");
+
+    // Validate source/schedule pairing
+    if (!schedule_paths.empty() && schedule_paths.size() != source_paths.size()) {
+        cerr << "Error: Number of --schedule (-S) arguments (" << schedule_paths.size() 
+             << ") must match --source (-s) arguments (" << source_paths.size() << ")\n";
+        return 1;
+    }
 
     cout << "Config: " << config_path << "\n";
     cout << "Output: " << output_dir << "\n";
     cout << "Geometry: " << (geometry_path.empty() ? "(none)" : geometry_path) << "\n";
     cout << "Sources: " << source_paths.size() << " file(s)\n";
-    for (const auto& sp : source_paths) {
-        cout << "  - " << sp << "\n";
+    for (size_t i = 0; i < source_paths.size(); i++) {
+        cout << "  - " << source_paths[i];
+        if (i < schedule_paths.size()) {
+            cout << " + " << schedule_paths[i];
+        }
+        cout << "\n";
     }
     cout << "Dump:   " << (dump_enabled ? "enabled" : "disabled");
     if (dump_enabled) {
@@ -83,14 +99,35 @@ int main(int argc, char** argv) {
     init_source_system(source_sys);
 
     int total_source_particles = 0;
-    for (const auto& sp : source_paths) {
+    bool use_separate_schedules = !schedule_paths.empty();
+    
+    for (size_t i = 0; i < source_paths.size(); i++) {
         ParticleSource src;
-        if (load_source(sp, src)) {
+        bool loaded = false;
+        
+        if (use_separate_schedules) {
+            // Load source config and schedule separately
+            if (load_source_config(source_paths[i], src)) {
+                if (load_schedule(schedule_paths[i], src)) {
+                    loaded = true;
+                } else {
+                    cerr << "Warning: Failed to load schedule: " << schedule_paths[i] << "\n";
+                }
+            } else {
+                cerr << "Warning: Failed to load source config: " << source_paths[i] << "\n";
+            }
+        } else {
+            // Load source with embedded schedule
+            loaded = load_source(source_paths[i], src);
+            if (!loaded) {
+                cerr << "Warning: Failed to load source: " << source_paths[i] << "\n";
+            }
+        }
+        
+        if (loaded) {
             add_source(source_sys, src);
             total_source_particles += src.total_particles;
-            printf("Loaded source: %s (%d total particles)\n", sp.c_str(), src.total_particles);
-        } else {
-            cerr << "Warning: Failed to load source: " << sp << "\n";
+            printf("Added source %zu: %d total particles\n", i, src.total_particles);
         }
     }
 

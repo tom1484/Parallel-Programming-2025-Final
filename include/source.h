@@ -63,16 +63,36 @@ struct SourceSystem {
 // Host Functions
 // ============================================================================
 
-// Load a single source from config file
+// Load source configuration from YAML file (without schedule)
 // File format:
-//   # Header: total_particles
-//   <total_particles>
-//   # Source parameters: start_x start_y end_x end_y dir_x dir_y bulk_vel temperature
-//   <start_x> <start_y> <end_x> <end_y> <dir_x> <dir_y> <bulk_velocity> <temperature>
-//   # Schedule entries: timestep num_particles
-//   <timestep_1> <num_particles_1>
-//   <timestep_2> <num_particles_2>
+//   total_particles: <int>       # Must match schedule sum
+//   geometry:
+//     start_x: <float>
+//     start_y: <float>
+//     end_x: <float>
+//     end_y: <float>
+//   direction:
+//     x: <float>
+//     y: <float>
+//   velocity:
+//     thermal_vel: <float>       # OR temperature: <float>
+//     stream_x: <float>          # OR bulk_velocity: <float>
+//     stream_y: <float>
+//     stream_z: <float>
+bool load_source_config(const std::string& path, ParticleSource& source);
+
+// Load schedule from .dat file
+// File format (one entry per line):
+//   <timestep> <count>
+//   <timestep> <count>
 //   ...
+// Lines starting with # are comments
+bool load_schedule(const std::string& path, ParticleSource& source);
+
+// Load source with embedded schedule (backward compatibility)
+// Supports both:
+//   1. YAML with schedule section
+//   2. Separate config + schedule files via load_source_config + load_schedule
 bool load_source(const std::string& path, ParticleSource& source);
 
 // Initialize an empty source system

@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
+#include <yaml-cpp/yaml.h>
 
 #include <cmath>
 #include <cstdio>
@@ -114,93 +115,19 @@ __global__ void emit_particles_kernel(
 // Host Functions
 // ============================================================================
 
-bool load_source(const std::string& path, ParticleSource& source) {
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        fprintf(stderr, "Error: Could not open source file: %s\n", path.c_str());
-        return false;
-    }
-
-    std::string line;
-    std::vector<int> timesteps;
-    std::vector<int> counts;
-
-    // Initialize with defaults
-    source.start_x = 0;
-    source.start_y = 0;
-    source.end_x = 0;
-    source.end_y = 0;
-    source.dir_x = 1;
-    source.dir_y = 0;
-    source.bulk_velocity = 0;
-    source.temperature = 300;
-    source.total_particles = 0;
-
-    float thermal_vel = 300.0f;
-    float stream_vel_x = 0, stream_vel_y = 0, stream_vel_z = 0;
-
-    while (std::getline(file, line)) {
-        // Skip empty lines and comments
-        if (line.empty() || line[0] == '#') continue;
-
-        std::istringstream iss(line);
-        std::string key;
-        iss >> key;
-
-        // Parse key-value pairs
-        if (key == "total_particles") {
-            iss >> source.total_particles;
-        } else if (key == "start_x") {
-            iss >> source.start_x;
-        } else if (key == "start_y") {
-            iss >> source.start_y;
-        } else if (key == "end_x") {
-            iss >> source.end_x;
-        } else if (key == "end_y") {
-            iss >> source.end_y;
-        } else if (key == "dir_x") {
-            iss >> source.dir_x;
-        } else if (key == "dir_y") {
-            iss >> source.dir_y;
-        } else if (key == "thermal_vel") {
-            iss >> thermal_vel;
-        } else if (key == "stream_vel_x") {
-            iss >> stream_vel_x;
-        } else if (key == "stream_vel_y") {
-            iss >> stream_vel_y;
-        } else if (key == "stream_vel_z") {
-            iss >> stream_vel_z;
-        } else if (key == "temperature") {
-            iss >> source.temperature;
-        } else if (key == "bulk_velocity") {
-            iss >> source.bulk_velocity;
-        } else {
-            // Try to parse as schedule entry: timestep count
-            // Key might be a number (timestep)
-            try {
-                int ts = std::stoi(key);
-                int count;
-                iss >> count;
-                timesteps.push_back(ts);
-                counts.push_back(count);
-            } catch (...) {
-                // Unknown key, skip
-                fprintf(stderr, "Warning: Unknown key in source file: %s\n", key.c_str());
-            }
-        }
-    }
-    file.close();
-
+// Helper function to finalize source after loading config (normalize direction, etc.)
+static void finalize_source_config(ParticleSource& source, float thermal_vel, 
+                                    float stream_vel_x, float stream_vel_y) {
     // Compute bulk_velocity from stream velocity if not explicitly set
     if (source.bulk_velocity == 0) {
         // Project stream velocity onto emission direction
         source.bulk_velocity = stream_vel_x * source.dir_x + stream_vel_y * source.dir_y;
     }
 
-    // Convert thermal_vel to temperature if temperature wasn't set
+    // Convert thermal_vel to temperature if temperature wasn't explicitly set
     // thermal_vel = sqrt(k_B * T / m), so T = m * thermal_vel^2 / k_B
     // For Argon: m = 6.6335e-26 kg, k_B = 1.380649e-23
-    if (source.temperature == 300 && thermal_vel != 300.0f) {
+    if (thermal_vel > 0.0f && source.temperature == 300.0f) {
         float mass = 6.6335e-26f;
         source.temperature = mass * thermal_vel * thermal_vel / K_BOLTZMANN;
     }
@@ -211,9 +138,13 @@ bool load_source(const std::string& path, ParticleSource& source) {
         source.dir_x /= len;
         source.dir_y /= len;
     }
+}
 
+// Helper function to upload schedule to device
+static bool upload_schedule(ParticleSource& source, const std::vector<int>& timesteps, 
+                            const std::vector<int>& counts, const std::string& context) {
     if (timesteps.empty()) {
-        fprintf(stderr, "Error: No schedule entries in source file: %s\n", path.c_str());
+        fprintf(stderr, "Error: No schedule entries in %s\n", context.c_str());
         return false;
     }
 
@@ -223,10 +154,9 @@ bool load_source(const std::string& path, ParticleSource& source) {
     if (source.total_particles == 0) {
         source.total_particles = schedule_sum;
     } else if (schedule_sum != source.total_particles) {
-        fprintf(stderr, "Warning: Source %s: header says %d particles, schedule sums to %d\n", path.c_str(),
-                source.total_particles, schedule_sum);
-        // Use the schedule sum as the actual total
-        source.total_particles = schedule_sum;
+        fprintf(stderr, "Error: %s: total_particles (%d) doesn't match schedule sum (%d)\n", 
+                context.c_str(), source.total_particles, schedule_sum);
+        return false;
     }
 
     // Upload schedule to device
@@ -243,13 +173,203 @@ bool load_source(const std::string& path, ParticleSource& source) {
     source.particles_generated = 0;
     source.first_particle_idx = 0;  // Set later by setup_source_rng
 
-    printf("Loaded source from %s: %d total particles, %d schedule entries\n", path.c_str(), source.total_particles,
-           source.schedule_size);
-    printf("  Segment: (%.4f, %.4f) -> (%.4f, %.4f)\n", source.start_x, source.start_y, source.end_x, source.end_y);
-    printf("  Direction: (%.4f, %.4f), bulk_vel=%.1f m/s, temp=%.1f K\n", source.dir_x, source.dir_y,
-           source.bulk_velocity, source.temperature);
-
     return true;
+}
+
+bool load_source_config(const std::string& path, ParticleSource& source) {
+    try {
+        YAML::Node config = YAML::LoadFile(path);
+
+        // Initialize with defaults
+        source.start_x = 0;
+        source.start_y = 0;
+        source.end_x = 0;
+        source.end_y = 0;
+        source.dir_x = 1;
+        source.dir_y = 0;
+        source.bulk_velocity = 0;
+        source.temperature = 300;
+        source.total_particles = 0;
+        source.d_schedule_timesteps = nullptr;
+        source.d_schedule_counts = nullptr;
+        source.schedule_size = 0;
+
+        float thermal_vel = 0.0f;
+        float stream_vel_x = 0, stream_vel_y = 0, stream_vel_z = 0;
+
+        // Parse directly from root level
+        if (config["total_particles"]) {
+            source.total_particles = config["total_particles"].as<int>();
+        }
+
+        // Geometry
+        if (config["geometry"]) {
+            YAML::Node geom = config["geometry"];
+            if (geom["start_x"]) source.start_x = geom["start_x"].as<float>();
+            if (geom["start_y"]) source.start_y = geom["start_y"].as<float>();
+            if (geom["end_x"]) source.end_x = geom["end_x"].as<float>();
+            if (geom["end_y"]) source.end_y = geom["end_y"].as<float>();
+        }
+
+        // Direction
+        if (config["direction"]) {
+            YAML::Node dir = config["direction"];
+            if (dir["x"]) source.dir_x = dir["x"].as<float>();
+            if (dir["y"]) source.dir_y = dir["y"].as<float>();
+        }
+
+        // Velocity parameters
+        if (config["velocity"]) {
+            YAML::Node vel = config["velocity"];
+            if (vel["thermal_vel"]) thermal_vel = vel["thermal_vel"].as<float>();
+            if (vel["temperature"]) source.temperature = vel["temperature"].as<float>();
+            if (vel["bulk_velocity"]) source.bulk_velocity = vel["bulk_velocity"].as<float>();
+            if (vel["stream_x"]) stream_vel_x = vel["stream_x"].as<float>();
+            if (vel["stream_y"]) stream_vel_y = vel["stream_y"].as<float>();
+            if (vel["stream_z"]) stream_vel_z = vel["stream_z"].as<float>();
+        }
+
+        finalize_source_config(source, thermal_vel, stream_vel_x, stream_vel_y);
+
+        printf("Loaded source config from %s: %d total particles\n", path.c_str(), source.total_particles);
+        printf("  Segment: (%.4f, %.4f) -> (%.4f, %.4f)\n", source.start_x, source.start_y, source.end_x, source.end_y);
+        printf("  Direction: (%.4f, %.4f), bulk_vel=%.1f m/s, temp=%.1f K\n", source.dir_x, source.dir_y,
+               source.bulk_velocity, source.temperature);
+
+        return true;
+
+    } catch (const YAML::Exception& e) {
+        fprintf(stderr, "Error loading source config %s: %s\n", path.c_str(), e.what());
+        return false;
+    }
+}
+
+bool load_schedule(const std::string& path, ParticleSource& source) {
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        fprintf(stderr, "Error: Could not open schedule file: %s\n", path.c_str());
+        return false;
+    }
+
+    std::vector<int> timesteps;
+    std::vector<int> counts;
+    std::string line;
+
+    while (std::getline(file, line)) {
+        // Skip empty lines and comments
+        if (line.empty() || line[0] == '#') continue;
+
+        // Trim leading whitespace
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos) continue;
+
+        std::istringstream iss(line.substr(start));
+        int ts, count;
+        if (iss >> ts >> count) {
+            timesteps.push_back(ts);
+            counts.push_back(count);
+        }
+    }
+    file.close();
+
+    if (!upload_schedule(source, timesteps, counts, path)) {
+        return false;
+    }
+
+    printf("Loaded schedule from %s: %d entries\n", path.c_str(), source.schedule_size);
+    return true;
+}
+
+bool load_source(const std::string& path, ParticleSource& source) {
+    try {
+        YAML::Node config = YAML::LoadFile(path);
+
+        // Initialize with defaults
+        source.start_x = 0;
+        source.start_y = 0;
+        source.end_x = 0;
+        source.end_y = 0;
+        source.dir_x = 1;
+        source.dir_y = 0;
+        source.bulk_velocity = 0;
+        source.temperature = 300;
+        source.total_particles = 0;
+
+        float thermal_vel = 0.0f;
+        float stream_vel_x = 0, stream_vel_y = 0, stream_vel_z = 0;
+
+        // Parse source section
+        if (config["source"]) {
+            YAML::Node src = config["source"];
+
+            if (src["total_particles"]) {
+                source.total_particles = src["total_particles"].as<int>();
+            }
+
+            // Geometry
+            if (src["geometry"]) {
+                YAML::Node geom = src["geometry"];
+                if (geom["start_x"]) source.start_x = geom["start_x"].as<float>();
+                if (geom["start_y"]) source.start_y = geom["start_y"].as<float>();
+                if (geom["end_x"]) source.end_x = geom["end_x"].as<float>();
+                if (geom["end_y"]) source.end_y = geom["end_y"].as<float>();
+            }
+
+            // Direction
+            if (src["direction"]) {
+                YAML::Node dir = src["direction"];
+                if (dir["x"]) source.dir_x = dir["x"].as<float>();
+                if (dir["y"]) source.dir_y = dir["y"].as<float>();
+            }
+
+            // Velocity parameters
+            if (src["velocity"]) {
+                YAML::Node vel = src["velocity"];
+                if (vel["thermal_vel"]) thermal_vel = vel["thermal_vel"].as<float>();
+                if (vel["temperature"]) source.temperature = vel["temperature"].as<float>();
+                if (vel["bulk_velocity"]) source.bulk_velocity = vel["bulk_velocity"].as<float>();
+                if (vel["stream_x"]) stream_vel_x = vel["stream_x"].as<float>();
+                if (vel["stream_y"]) stream_vel_y = vel["stream_y"].as<float>();
+                if (vel["stream_z"]) stream_vel_z = vel["stream_z"].as<float>();
+            }
+        }
+
+        // Parse schedule (if present in same file)
+        std::vector<int> timesteps;
+        std::vector<int> counts;
+
+        if (config["schedule"]) {
+            for (const auto& entry : config["schedule"]) {
+                int ts = entry["timestep"].as<int>();
+                int count = entry["count"].as<int>();
+                timesteps.push_back(ts);
+                counts.push_back(count);
+            }
+        }
+
+        finalize_source_config(source, thermal_vel, stream_vel_x, stream_vel_y);
+
+        if (timesteps.empty()) {
+            fprintf(stderr, "Error: No schedule entries in source file: %s\n", path.c_str());
+            return false;
+        }
+
+        if (!upload_schedule(source, timesteps, counts, path)) {
+            return false;
+        }
+
+        printf("Loaded source from %s: %d total particles, %d schedule entries\n", path.c_str(), source.total_particles,
+               source.schedule_size);
+        printf("  Segment: (%.4f, %.4f) -> (%.4f, %.4f)\n", source.start_x, source.start_y, source.end_x, source.end_y);
+        printf("  Direction: (%.4f, %.4f), bulk_vel=%.1f m/s, temp=%.1f K\n", source.dir_x, source.dir_y,
+               source.bulk_velocity, source.temperature);
+
+        return true;
+
+    } catch (const YAML::Exception& e) {
+        fprintf(stderr, "Error loading source file %s: %s\n", path.c_str(), e.what());
+        return false;
+    }
 }
 
 void init_source_system(SourceSystem& src_sys) {
