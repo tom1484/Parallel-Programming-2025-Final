@@ -82,7 +82,7 @@ void dump_cells(const std::string& output_dir, int timestep, const CellSystem& c
     header_info << " at timestep " << timestep;
 
     dump_cell_impl(cell_path.str(), header_info.str(), c_sys);
-    printf("Dumped cells: %s\n", cell_path.str().c_str());
+    // printf("Dumped cells: %s\n", cell_path.str().c_str());
 }
 
 void dump_particles(const std::string& output_dir, int timestep, const ParticleSystem& p_sys) {

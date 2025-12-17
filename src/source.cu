@@ -494,8 +494,8 @@ void emit_particles(SourceSystem& src_sys, ParticleSystem& p_sys, const CellSyst
             params.particle_mass, params.cell_dx, params.cell_dy, params.grid_nx, params.grid_ny, src_sys.d_rng_states);
         CHECK_CUDA(cudaGetLastError());
 
-        printf("Timestep %d: Source %d emitted %d particles (total: %d/%d)\n", current_timestep, i, num_to_emit,
-               source.particles_generated + num_to_emit, source.total_particles);
+        // printf("Timestep %d: Source %d emitted %d particles (total: %d/%d)\n", current_timestep, i, num_to_emit,
+        //        source.particles_generated + num_to_emit, source.total_particles);
 
         // Update tracking
         source.particles_generated += num_to_emit;
