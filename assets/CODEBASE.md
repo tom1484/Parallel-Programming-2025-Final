@@ -38,6 +38,7 @@ final-dsmc/
 │   ├── configure           # CMake configuration script
 │   ├── run_release         # Run solver with test case
 │   ├── visualize.py        # Python visualization and GIF generator
+│   ├── draw_result.py      # Python heatmap plotting for cell stats
 │   └── geometry/           # Geometry generation scripts
 │       ├── base.py         # Core geometry data structures
 │       └── circle.py       # Circle geometry generator
@@ -75,6 +76,11 @@ struct SimParams {
     float domain_lx, domain_ly; // Physical domain size (meters)
     float cell_dx, cell_dy;     // Cell dimensions (derived)
     float dt;                   // Time step
+    
+    // Sampling parameters
+    float particle_weight;      // Real atoms per simulator particle (Fnum)
+    float cell_volume;          // Cell volume (dx * dy * 1.0 for 2D)
+    float particle_mass;        // Molecular mass (kg), default: Argon
 };
 ```
 
@@ -114,8 +120,14 @@ struct Segment {
 Per-cell data and sorting workspace:
 ```cpp
 struct CellSystem {
-    float* d_density;           // Sampled density
-    float* d_temperature;       // Sampled temperature
+    float* d_density;           // Sampled number density (m⁻³)
+    float* d_temperature;       // Sampled temperature (K)
+    
+    // Velocity accumulators for macroscopic sampling
+    float* d_vel_sum_x;         // Sum of vx per cell
+    float* d_vel_sum_y;         // Sum of vy per cell
+    float* d_vel_sum_z;         // Sum of vz per cell
+    float* d_vel_sq_sum;        // Sum of |v|² per cell
     
     // Sorting infrastructure
     int* d_cell_particle_count; // Histogram of particles per cell
@@ -185,6 +197,13 @@ void init_empty_geometry(CellSystem& c_sys);
 ### `kernels.h`
 Physics kernel interface:
 ```cpp
+// Reset sampling accumulators to zero before each timestep
+__global__ void reset_sampling_kernel(CellSystem c_sys);
+
+// Compute final density & temperature from accumulated sums
+__global__ void finalize_sampling_kernel(CellSystem c_sys, SimParams params);
+
+// Main physics kernel - processes one cell per block
 __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimParams params);
 ```
 
@@ -207,8 +226,12 @@ void sort_particles(ParticleSystem& p_sys, CellSystem& c_sys);
 ### `visualize.h`
 Debug output interface:
 ```cpp
+// Dump timestep data (cell + particle files) for visualization
 void dump_simulation(const std::string& output_dir, int timestep,
                      const ParticleSystem& p_sys, const CellSystem& c_sys);
+
+// Dump final particle data for evaluation (mandatory, always called)
+void dump_final_result(const std::string& output_dir, const ParticleSystem& p_sys);
 ```
 
 ---
@@ -242,13 +265,17 @@ CUDA error checking macro:
 4. **Simulation Loop**:
    ```
    for each timestep:
-       1. Launch solve_cell_kernel (physics)
-       2. Call sort_particles (reorder by cell)
-       3. Swap double buffers
-       4. Optionally dump state (based on dump settings)
+       1. Launch reset_sampling_kernel (clear accumulators)
+       2. Launch solve_cell_kernel (physics + accumulate sampling)
+       3. Launch finalize_sampling_kernel (compute density & temperature)
+       4. Call sort_particles (reorder by cell)
+       5. Swap double buffers
+       6. Optionally dump state (based on dump settings)
    ```
 
-5. **Cleanup**: Calls `free_system()`
+5. **Final Dump**: Always dumps `particle.dat` to output directory for evaluation
+
+6. **Cleanup**: Calls `free_system()`
 
 ---
 
@@ -274,12 +301,19 @@ CUDA error checking macro:
 1. **Load**: Copy particles from global → shared memory (coalesced)
 2. **Sub-cell Indexing**: Assign particles to collision sub-cells
 3. **Collision**: NTC method (placeholder - to be implemented)
-4. **Sampling**: Accumulate macroscopic properties (placeholder)
+4. **Sampling**: Accumulate velocity moments using shared memory reduction, write sums to global memory
 5. **Movement**: Update positions using `p += v * dt`
 6. **Segment Collision**: If cell has a segment, check ray-segment intersection and apply specular reflection
 7. **Boundary**: Reflective walls (bounce particles back into domain)
 8. **Re-locate**: Calculate new cell ID based on updated position
 9. **Store**: Write back to global memory
+
+**Sampling Implementation:**
+- Uses shared memory reduction to minimize atomic operations
+- Accumulates: `Σvx`, `Σvy`, `Σvz`, `Σ(vx²+vy²+vz²)`
+- `finalize_sampling_kernel` computes:
+  - **Density**: `n = N_sim × Fnum / V_cell`
+  - **Temperature**: `T = m⟨c²⟩/(3k_B)` where `⟨c²⟩ = ⟨v²⟩ - |⟨v⟩|²`
 
 **Key Implementation Details:**
 - Uses `__shared__` arrays for particle data (reduces global memory latency)
@@ -335,10 +369,16 @@ nx ny lx ly
 ---
 
 ### `visualize.cu`
-**Debug dump implementation.** Copies GPU data to host and writes ASCII files:
+**Debug dump implementation.** Copies GPU data to host and writes ASCII files.
 
+**Internal Helpers:**
+- `dump_cell_impl()`: Dumps cell data to file
+- `dump_particle_impl()`: Dumps particle data to file
+
+**Output Files:**
 - `{timestep}-cell.dat`: Cell ID, particle count, offset, density, temperature
 - `{timestep}-particle.dat`: Particle ID, position (x,y), velocity (x,y,z), species, cell ID
+- `particle.dat`: Final particle state (mandatory output for evaluation)
 
 ---
 
@@ -362,6 +402,31 @@ python scripts/visualize.py -i outputs/test -o animation.gif [options]
 | `--show-grid` | Draw cell grid lines |
 | `--show-velocity` | Draw velocity vectors |
 | `--color-by` | Color by: `speed`, `cell`, or `species` |
+
+---
+
+### `draw_result.py`
+Python script to draw cell statistics as heatmaps:
+
+```bash
+python scripts/draw_result.py -i outputs/test -c config.yaml [options]
+```
+
+**Options:**
+| Flag | Description |
+|------|-------------|
+| `-i, --input` | Input directory with `cell.dat` or path to file directly |
+| `-o, --output` | Output image filename (default: `<input>/heatmaps.png`) |
+| `-c, --config` | Config YAML for grid dimensions |
+| `-g, --geometry` | Geometry file to overlay solid objects |
+| `--log-scale` | Use logarithmic scale for density |
+| `--show` | Display plot interactively |
+| `--dpi` | Image resolution (default: 150) |
+
+**Output:**
+- 3-panel figure with **Density**, **Temperature**, and **Particle Count** heatmaps
+- Solid object boundaries drawn as white lines
+- Statistics summary (min/max/mean) at bottom
 
 ---
 
