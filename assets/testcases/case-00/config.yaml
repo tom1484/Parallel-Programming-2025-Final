@@ -1,12 +1,12 @@
 grid:
-  nx: 10
-  ny: 10
+  nx: 20
+  ny: 20
   lx: 0.3
   ly: 0.3
 
 physics:
-  dt: 1.0e-8
-  total_steps: 10
+  dt: 2.0e-6
+  total_steps: 100
 
 init:
   temp: 200.0
