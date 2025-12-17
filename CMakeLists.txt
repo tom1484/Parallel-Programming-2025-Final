@@ -26,37 +26,38 @@ find_package(CUDAToolkit REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
 # Add executable
-add_executable(main
+add_executable(dsmc_solver
     src/main.cu
     src/kernels.cu
     src/sorting.cu
+    src/visualize.cu
 )
 
-target_include_directories(main PRIVATE
+target_include_directories(dsmc_solver PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 # Link CUDA libraries
-target_link_libraries(main PRIVATE 
+target_link_libraries(dsmc_solver PRIVATE 
     CUDA::cudart
     CUDA::cuda_driver
     yaml-cpp::yaml-cpp
 )
 
 # Set C++ compiler flags
-target_compile_options(main PRIVATE
+target_compile_options(dsmc_solver PRIVATE
     $<$<COMPILE_LANGUAGE:CXX>:-O3>
     $<$<COMPILE_LANGUAGE:CXX>:-fPIC>
 )
 
 # Set CUDA compiler flags
-set_target_properties(main PROPERTIES
+set_target_properties(dsmc_solver PROPERTIES
     CUDA_SEPARABLE_COMPILATION ON
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 
 # CUDA specific compile options
-target_compile_options(main PRIVATE
+target_compile_options(dsmc_solver PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-O3>
     $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
     $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
@@ -64,19 +65,12 @@ target_compile_options(main PRIVATE
 
 # Optional: Set debug flags when CMAKE_BUILD_TYPE is Debug
 if(CMAKE_BUILD_TYPE MATCHES Debug)
-    target_compile_options(main PRIVATE 
+    target_compile_options(dsmc_solver PRIVATE 
         $<$<COMPILE_LANGUAGE:CXX>:-g>
         $<$<COMPILE_LANGUAGE:CUDA>:-G>  # CUDA debug info
         $<$<COMPILE_LANGUAGE:CUDA>:-g>
     )
 endif()
-
-# Optional: Add custom targets for cleaning data files
-add_custom_target(clean_dat
-    COMMAND ${CMAKE_COMMAND} -E remove *.dat
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    COMMENT "Removing all .dat files"
-)
 
 # Print configuration info
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
