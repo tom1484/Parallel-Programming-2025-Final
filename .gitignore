@@ -2,3 +2,5 @@ build/
 outputs/
 
 __pycache__/
+
+assets/**/geometry/
