@@ -192,15 +192,6 @@ int main(int argc, char** argv) {
     // Vis counter for tracking how many dumps have been made
     int vis_count = 0;
 
-    // Dump initial state (timestep 0)
-    if (vis_enabled && vis_start == 0 && vis_count < vis_max) {
-        dump_cells(vis_dir, 0, c_sys);
-        if (vis_particle) {
-            dump_particles(vis_dir, 0, p_sys);
-        }
-        vis_count++;
-    }
-
     // =========================================================================
     // Simulation Loop
     // =========================================================================
@@ -237,12 +228,11 @@ int main(int argc, char** argv) {
         swap(p_sys.d_species, p_sys.d_species_sorted);
 
         // --- Visualization Dump ---
-        int current_step = step + 1;
-        if (vis_enabled && vis_count < vis_max && current_step >= vis_start) {
-            if ((current_step - vis_start) % vis_skip == 0) {
-                dump_cells(vis_dir, current_step, c_sys);
+        if (vis_enabled && vis_count < vis_max && step >= vis_start) {
+            if ((step - vis_start) % vis_skip == 0) {
+                dump_cells(vis_dir, step, c_sys);
                 if (vis_particle) {
-                    dump_particles(vis_dir, current_step, p_sys);
+                    dump_particles(vis_dir, step, p_sys);
                 }
                 vis_count++;
             }
