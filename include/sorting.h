@@ -15,8 +15,8 @@ __global__ void count_particles_kernel(const int* __restrict__ d_cell_id, int* _
 // Kernel 3: Scatter - Move particles to their new sorted locations
 // Uses a "running offset" array (d_write_offsets) to determine where to write
 // Inactive particles (cell_id == INACTIVE_CELL_ID) are written starting from d_inactive_write_idx
-__global__ void reorder_particles_kernel(ParticleSystem sys, int* d_write_offsets, 
-                                         int* d_inactive_write_idx, int num_particles);
+__global__ void reorder_particles_kernel(ParticleSystem sys, int* d_write_offsets, int* d_inactive_write_idx,
+                                         int num_particles);
 
 // ------------------------------------------------------------------
 // Host Function: The Sorting Pipeline

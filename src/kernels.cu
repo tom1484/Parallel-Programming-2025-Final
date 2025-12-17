@@ -39,7 +39,7 @@ __global__ void finalize_sampling_kernel(CellSystem c_sys, SimParams params) {
     if (idx >= c_sys.total_cells) return;
 
     int n_particles = c_sys.d_cell_particle_count[idx];
-    
+
     if (n_particles == 0) {
         c_sys.d_density[idx] = 0.0f;
         c_sys.d_temperature[idx] = 0.0f;
@@ -55,101 +55,99 @@ __global__ void finalize_sampling_kernel(CellSystem c_sys, SimParams params) {
     // T = (m / 3k_B) * <c^2> where c = v - <v> is the peculiar velocity
     // <c^2> = <v^2> - <v>^2
     // For 3D: T = m/(3*k_B) * (<vx^2 + vy^2 + vz^2> - <vx>^2 - <vy>^2 - <vz>^2)
-    
+
     float inv_n = 1.0f / (float)n_particles;
-    
+
     // Mean velocities
     float mean_vx = c_sys.d_vel_sum_x[idx] * inv_n;
     float mean_vy = c_sys.d_vel_sum_y[idx] * inv_n;
     float mean_vz = c_sys.d_vel_sum_z[idx] * inv_n;
-    
+
     // Mean of velocity squared
     float mean_v_sq = c_sys.d_vel_sq_sum[idx] * inv_n;
-    
+
     // Peculiar velocity squared: <c^2> = <v^2> - |<v>|^2
-    float mean_c_sq = mean_v_sq - (mean_vx*mean_vx + mean_vy*mean_vy + mean_vz*mean_vz);
-    
+    float mean_c_sq = mean_v_sq - (mean_vx * mean_vx + mean_vy * mean_vy + mean_vz * mean_vz);
+
     // Prevent negative values due to floating point errors
     mean_c_sq = fmaxf(mean_c_sq, 0.0f);
-    
+
     // Temperature: T = m * <c^2> / (3 * k_B)
     // Boltzmann constant k_B = 1.380649e-23 J/K
     const float k_B = 1.380649e-23f;
     float temperature = params.particle_mass * mean_c_sq / (3.0f * k_B);
-    
+
     c_sys.d_temperature[idx] = temperature;
 }
 
 // Check if a particle trajectory crosses a line segment
 // Returns true if intersection occurs, and sets t to the parametric intersection point
-__device__ bool segment_intersection(
-    double p0x, double p0y,  // Old position
-    double p1x, double p1y,  // New position
-    float sx, float sy,      // Segment start
-    float ex, float ey,      // Segment end
-    float& t                 // Output: parametric t along particle trajectory [0,1]
+__device__ bool segment_intersection(double p0x, double p0y,  // Old position
+                                     double p1x, double p1y,  // New position
+                                     float sx, float sy,      // Segment start
+                                     float ex, float ey,      // Segment end
+                                     float& t                 // Output: parametric t along particle trajectory [0,1]
 ) {
     // Direction of particle motion
     double dx = p1x - p0x;
     double dy = p1y - p0y;
-    
+
     // Direction of segment
     float segx = ex - sx;
     float segy = ey - sy;
-    
+
     // Cross product for denominator
     double denom = dx * segy - dy * segx;
-    
+
     // Parallel check
     if (fabs(denom) < 1e-10) return false;
-    
+
     // Vector from segment start to particle start
     double qpx = p0x - sx;
     double qpy = p0y - sy;
-    
+
     // Parametric values
-    t = (float)((segx * qpy - segy * qpx) / denom);  // Along particle trajectory
-    float u = (float)((dx * qpy - dy * qpx) / denom); // Along segment
-    
+    t = (float)((segx * qpy - segy * qpx) / denom);    // Along particle trajectory
+    float u = (float)((dx * qpy - dy * qpx) / denom);  // Along segment
+
     // Check if intersection is within both line segments
     return (t >= 0.0f && t <= 1.0f && u >= 0.0f && u <= 1.0f);
 }
 
 // Reflect particle off a segment (specular reflection)
-__device__ void reflect_particle(
-    PositionType& p,         // Position (will be updated)
-    VelocityType& v,         // Velocity (will be updated)
-    const Segment& seg,      // Segment to reflect off
-    float t                  // Intersection parameter
+__device__ void reflect_particle(PositionType& p,     // Position (will be updated)
+                                 VelocityType& v,     // Velocity (will be updated)
+                                 const Segment& seg,  // Segment to reflect off
+                                 float t              // Intersection parameter
 ) {
     // Normal vector
     float nx = seg.normal_x;
     float ny = seg.normal_y;
-    
+
     // Reflect velocity: v' = v - 2(v·n)n
     float vdotn = v.x * nx + v.y * ny;
     v.x = v.x - 2.0f * vdotn * nx;
     v.y = v.y - 2.0f * vdotn * ny;
-    
+
     // Calculate intersection point
     // We need the old position to compute this, but we only have new position
     // Since p was already updated, we need to work backwards
     // p_intersect = p_old + t * (p_new - p_old)
     // p_new = p_old + v * dt, so p_old = p_new - displacement
     // For simplicity, just flip the remaining distance past the wall
-    
+
     // Reflect position: mirror across the segment
     // Distance from current position to segment (signed)
     float px = (float)p.x;
     float py = (float)p.y;
-    
+
     // Vector from segment start to particle
     float dx = px - seg.start_x;
     float dy = py - seg.start_y;
-    
+
     // Distance along normal (signed - positive if on normal side)
     float dist = dx * nx + dy * ny;
-    
+
     // If particle is on wrong side of segment, reflect it
     if (dist < 0) {
         p.x = px - 2.0 * dist * nx;
@@ -255,7 +253,7 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
         local_vx_sum += v.x;
         local_vy_sum += v.y;
         local_vz_sum += v.z;
-        local_vsq_sum += v.x*v.x + v.y*v.y + v.z*v.z;
+        local_vsq_sum += v.x * v.x + v.y * v.y + v.z * v.z;
     }
 
     // Atomic add to shared memory accumulators
@@ -298,18 +296,28 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
         Segment seg = c_sys.d_segments[cell_idx];
         if (seg.exists) {
             float t;
-            if (segment_intersection(old_x, old_y, p.x, p.y,
-                                     seg.start_x, seg.start_y,
-                                     seg.end_x, seg.end_y, t)) {
+            if (segment_intersection(old_x, old_y, p.x, p.y, seg.start_x, seg.start_y, seg.end_x, seg.end_y, t)) {
                 reflect_particle(p, v, seg, t);
             }
         }
 
         // 3. Domain boundary interaction (reflective walls)
-        if (p.x < 0) { p.x = -p.x; v.x = -v.x; }
-        if (p.x >= domain_lx) { p.x = 2.0 * domain_lx - p.x; v.x = -v.x; }
-        if (p.y < 0) { p.y = -p.y; v.y = -v.y; }
-        if (p.y >= domain_ly) { p.y = 2.0 * domain_ly - p.y; v.y = -v.y; }
+        if (p.x < 0) {
+            p.x = -p.x;
+            v.x = -v.x;
+        }
+        if (p.x >= domain_lx) {
+            p.x = 2.0 * domain_lx - p.x;
+            v.x = -v.x;
+        }
+        if (p.y < 0) {
+            p.y = -p.y;
+            v.y = -v.y;
+        }
+        if (p.y >= domain_ly) {
+            p.y = 2.0 * domain_ly - p.y;
+            v.y = -v.y;
+        }
 
         // 4. Locate new cell based on updated position
         int cx = (int)(p.x / dx);

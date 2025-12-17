@@ -43,7 +43,8 @@ static void dump_cell_impl(const std::string& cell_path, const std::string& head
 }
 
 // Internal helper: dump particle data to file
-static void dump_particle_impl(const std::string& particle_path, const std::string& header_info, const ParticleSystem& p_sys) {
+static void dump_particle_impl(const std::string& particle_path, const std::string& header_info,
+                               const ParticleSystem& p_sys) {
     std::vector<PositionType> h_pos(p_sys.total_particles);
     std::vector<VelocityType> h_vel(p_sys.total_particles);
     std::vector<int> h_species(p_sys.total_particles);

@@ -5,11 +5,11 @@
 
 // Line segment for solid object boundaries (one per cell, if exists)
 struct Segment {
-    float start_x, start_y;   // Segment start point
-    float end_x, end_y;       // Segment end point
-    float normal_x, normal_y; // Outward normal (should be normalized)
-    int exists;               // Whether this cell has a segment (0 or 1)
-    int inside;               // Whether this cell is inside a solid object (0 or 1)
+    float start_x, start_y;    // Segment start point
+    float end_x, end_y;        // Segment end point
+    float normal_x, normal_y;  // Outward normal (should be normalized)
+    int exists;                // Whether this cell has a segment (0 or 1)
+    int inside;                // Whether this cell is inside a solid object (0 or 1)
 };
 
 // Simulation parameters (passed to kernels)
@@ -21,11 +21,11 @@ struct SimParams {
     float domain_ly;  // Domain height (meters)
 
     // Derived (computed once)
-    float cell_dx;    // Cell width
-    float cell_dy;    // Cell height
+    float cell_dx;  // Cell width
+    float cell_dy;  // Cell height
 
     // Physics
-    float dt;         // Time step
+    float dt;  // Time step
 
     // Sampling parameters
     float particle_weight;  // Real atoms per simulator particle (Fnum)
@@ -54,23 +54,23 @@ struct CellSystem {
     float* d_temperature;
 
     // Velocity sums for sampling (to compute mean velocity, then temperature)
-    float* d_vel_sum_x;       // Sum of vx for each cell
-    float* d_vel_sum_y;       // Sum of vy for each cell  
-    float* d_vel_sum_z;       // Sum of vz for each cell
-    float* d_vel_sq_sum;      // Sum of (vx^2 + vy^2 + vz^2) for each cell
+    float* d_vel_sum_x;   // Sum of vx for each cell
+    float* d_vel_sum_y;   // Sum of vy for each cell
+    float* d_vel_sum_z;   // Sum of vz for each cell
+    float* d_vel_sq_sum;  // Sum of (vx^2 + vy^2 + vz^2) for each cell
 
     // Sorting helpers
     int* d_cell_particle_count;
     int* d_cell_offset;
     int total_cells;
 
-    int* d_write_offsets;        // Pre-allocated for scatter kernel
-    int* d_inactive_write_idx;   // Write index for inactive particles (single int on device)
-    void* d_temp_storage;        // Pre-allocated for CUB scan
-    size_t temp_storage_bytes;   // Size of CUB temp storage
+    int* d_write_offsets;       // Pre-allocated for scatter kernel
+    int* d_inactive_write_idx;  // Write index for inactive particles (single int on device)
+    void* d_temp_storage;       // Pre-allocated for CUB scan
+    size_t temp_storage_bytes;  // Size of CUB temp storage
 
     // Solid object geometry
-    Segment* d_segments;         // Array of segments, one per cell
+    Segment* d_segments;  // Array of segments, one per cell
 };
 
 #endif  // DSMC_DATA_TYPES_H

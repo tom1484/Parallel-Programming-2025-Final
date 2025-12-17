@@ -1,5 +1,3 @@
-#include "geometry.h"
-
 #include <cuda_runtime.h>
 
 #include <cmath>
@@ -9,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "geometry.h"
 #include "utils.cuh"
 
 void init_empty_geometry(CellSystem& c_sys) {
@@ -24,8 +23,8 @@ void init_empty_geometry(CellSystem& c_sys) {
         h_segments[i].normal_x = 0.0f;
         h_segments[i].normal_y = 0.0f;
     }
-    CHECK_CUDA(cudaMemcpy(c_sys.d_segments, h_segments.data(),
-                          c_sys.total_cells * sizeof(Segment), cudaMemcpyHostToDevice));
+    CHECK_CUDA(
+        cudaMemcpy(c_sys.d_segments, h_segments.data(), c_sys.total_cells * sizeof(Segment), cudaMemcpyHostToDevice));
 }
 
 bool load_geometry(const std::string& path, CellSystem& c_sys, const SimParams& params) {
@@ -67,8 +66,8 @@ bool load_geometry(const std::string& path, CellSystem& c_sys, const SimParams& 
 
             // Validate grid dimensions match
             if (nx != params.grid_nx || ny != params.grid_ny) {
-                fprintf(stderr, "Error: Geometry grid (%d x %d) doesn't match simulation grid (%d x %d)\n",
-                        nx, ny, params.grid_nx, params.grid_ny);
+                fprintf(stderr, "Error: Geometry grid (%d x %d) doesn't match simulation grid (%d x %d)\n", nx, ny,
+                        params.grid_nx, params.grid_ny);
                 init_empty_geometry(c_sys);
                 return false;
             }
@@ -76,8 +75,9 @@ bool load_geometry(const std::string& path, CellSystem& c_sys, const SimParams& 
             // Check domain size (with small tolerance)
             float tol = 1e-4f;
             if (std::abs(lx - params.domain_lx) > tol || std::abs(ly - params.domain_ly) > tol) {
-                fprintf(stderr, "Warning: Geometry domain (%.4f x %.4f) doesn't match simulation domain (%.4f x %.4f)\n",
-                        lx, ly, params.domain_lx, params.domain_ly);
+                fprintf(stderr,
+                        "Warning: Geometry domain (%.4f x %.4f) doesn't match simulation domain (%.4f x %.4f)\n", lx,
+                        ly, params.domain_lx, params.domain_ly);
             }
 
             header_read = true;
@@ -96,8 +96,8 @@ bool load_geometry(const std::string& path, CellSystem& c_sys, const SimParams& 
 
         // Validate cell_id
         if (cell_id < 0 || cell_id >= c_sys.total_cells) {
-            fprintf(stderr, "Error: Invalid cell_id %d at line %d (max: %d)\n",
-                    cell_id, line_num, c_sys.total_cells - 1);
+            fprintf(stderr, "Error: Invalid cell_id %d at line %d (max: %d)\n", cell_id, line_num,
+                    c_sys.total_cells - 1);
             continue;
         }
 
@@ -146,8 +146,8 @@ bool load_geometry(const std::string& path, CellSystem& c_sys, const SimParams& 
     printf("Loaded geometry from %s: %d segments, %d inside cells\n", path.c_str(), seg_count, inside_count);
 
     // Upload to GPU
-    CHECK_CUDA(cudaMemcpy(c_sys.d_segments, h_segments.data(),
-                          c_sys.total_cells * sizeof(Segment), cudaMemcpyHostToDevice));
+    CHECK_CUDA(
+        cudaMemcpy(c_sys.d_segments, h_segments.data(), c_sys.total_cells * sizeof(Segment), cudaMemcpyHostToDevice));
 
     return true;
 }

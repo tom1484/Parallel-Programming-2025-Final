@@ -1,4 +1,5 @@
 #include <sys/stat.h>
+
 #include <iostream>
 #include <vector>
 
@@ -21,34 +22,20 @@ int main(int argc, char** argv) {
     // Argument Parsing
     // =========================================================================
     argparse::ArgumentParser program("dsmc_solver", "1.0");
-    program.add_argument("-c", "--config")
-        .default_value(std::string("config.yaml"))
-        .help("Path to config YAML file");
-    program.add_argument("-o", "--output")
-        .default_value(std::string("outputs"))
-        .help("Output directory for dumps");
-    program.add_argument("-g", "--geometry")
-        .default_value(std::string(""))
-        .help("Path to geometry file (optional)");
-    program.add_argument("-d", "--dump")
-        .flag()
-        .help("Enable dumping simulation state");
+    program.add_argument("-c", "--config").default_value(std::string("config.yaml")).help("Path to config YAML file");
+    program.add_argument("-o", "--output").default_value(std::string("outputs")).help("Output directory for dumps");
+    program.add_argument("-g", "--geometry").default_value(std::string("")).help("Path to geometry file (optional)");
+    program.add_argument("-d", "--dump").flag().help("Enable dumping simulation state");
     program.add_argument("-s", "--source")
         .append()
         .default_value(std::vector<std::string>{})
         .help("Path to source schedule file (can be specified multiple times)");
-    program.add_argument("--dump-start")
-        .default_value(0)
-        .scan<'i', int>()
-        .help("First timestep to dump (default: 0)");
+    program.add_argument("--dump-start").default_value(0).scan<'i', int>().help("First timestep to dump (default: 0)");
     program.add_argument("--dump-max")
         .default_value(100)
         .scan<'i', int>()
         .help("Maximum number of timesteps to dump (default: 100)");
-    program.add_argument("--dump-skip")
-        .default_value(1)
-        .scan<'i', int>()
-        .help("Dump every N timesteps (default: 1)");
+    program.add_argument("--dump-skip").default_value(1).scan<'i', int>().help("Dump every N timesteps (default: 1)");
 
     try {
         program.parse_args(argc, argv);
@@ -86,8 +73,8 @@ int main(int argc, char** argv) {
     SimConfig config = load_config(config_path);
     SimParams sim_params = make_sim_params(config);
 
-    printf("Simulation: %dx%d grid, dt=%.2e, steps=%d\n", 
-           config.grid_nx, config.grid_ny, config.dt, config.total_steps);
+    printf("Simulation: %dx%d grid, dt=%.2e, steps=%d\n", config.grid_nx, config.grid_ny, config.dt,
+           config.total_steps);
 
     // =========================================================================
     // Source Loading

@@ -1,25 +1,24 @@
-#include "simulation.h"
+#include <cuda_runtime.h>
 
 #include <cub/cub.cuh>
-#include <cuda_runtime.h>
 #include <random>
 #include <vector>
 
+#include "simulation.h"
 #include "utils.cuh"
 
 using namespace std;
 
 // --- Allocation ---
 
-void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& cfg,
-                     int extra_particles) {
+void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& cfg, int extra_particles) {
     // Calculate totals
     c_sys.total_cells = cfg.grid_nx * cfg.grid_ny;
 
     // Estimate initial particles based on density and volume
     double volume = (cfg.domain_lx * cfg.domain_ly);
     int init_particles = (int)((cfg.init_density * volume) / cfg.particle_weight);
-    
+
     // Total particles = initial + source particles
     // Add 10% buffer for safety
     int total_particles = init_particles + extra_particles;
@@ -73,23 +72,23 @@ void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& 
 // Returns true if the point is on the "inside" (opposite to normal) side of the segment
 static bool is_inside_segment(double px, double py, const Segment& seg) {
     if (!seg.exists) return false;
-    
+
     // Vector from segment start to point
     float dx = (float)px - seg.start_x;
     float dy = (float)py - seg.start_y;
-    
+
     // Dot product with outward normal
     // If negative, point is on the inside (opposite to normal direction)
     float dot = dx * seg.normal_x + dy * seg.normal_y;
-    
+
     return dot < 0.0f;
 }
 
 void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimConfig& cfg, int num_initial_particles) {
     // Copy segment data from GPU to check for inside cells
     vector<Segment> h_segments(c_sys.total_cells);
-    CHECK_CUDA(cudaMemcpy(h_segments.data(), c_sys.d_segments,
-                          c_sys.total_cells * sizeof(Segment), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(
+        cudaMemcpy(h_segments.data(), c_sys.d_segments, c_sys.total_cells * sizeof(Segment), cudaMemcpyDeviceToHost));
 
     // Count inside cells and segment cells for info
     int inside_count = 0;
@@ -99,8 +98,7 @@ void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimCo
         if (h_segments[i].exists) segment_count++;
     }
     if (inside_count > 0 || segment_count > 0) {
-        printf("Initialization: Avoiding %d inside cells and checking %d segment cells\n", 
-               inside_count, segment_count);
+        printf("Initialization: Avoiding %d inside cells and checking %d segment cells\n", inside_count, segment_count);
     }
 
     // Only initialize the initial particles, not source particles
@@ -133,13 +131,12 @@ void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimCo
             cx = max(0, min(cx, cfg.grid_nx - 1));
             cy = max(0, min(cy, cfg.grid_ny - 1));
             cell_id = cy * cfg.grid_nx + cx;
-            
+
             // Check if position is valid:
             // 1. Not in a cell marked as completely inside
             // 2. Not on the inside of a segment (if cell has one)
-            is_valid = !h_segments[cell_id].inside && 
-                       !is_inside_segment(px, py, h_segments[cell_id]);
-            
+            is_valid = !h_segments[cell_id].inside && !is_inside_segment(px, py, h_segments[cell_id]);
+
             attempts++;
         } while (!is_valid && attempts < max_attempts);
 
@@ -182,14 +179,14 @@ __global__ void init_inactive_kernel(int* d_cell_id, int start_idx, int count) {
 void init_source_particles_inactive(ParticleSystem& p_sys, int init_particles, int total_particles) {
     int source_particles = total_particles - init_particles;
     if (source_particles <= 0) return;
-    
+
     int threads = 256;
     int blocks = (source_particles + threads - 1) / threads;
     init_inactive_kernel<<<blocks, threads>>>(p_sys.d_cell_id, init_particles, source_particles);
     CHECK_CUDA(cudaGetLastError());
-    
-    printf("Initialized %d source particle slots as inactive (indices %d to %d)\n",
-           source_particles, init_particles, total_particles - 1);
+
+    printf("Initialized %d source particle slots as inactive (indices %d to %d)\n", source_particles, init_particles,
+           total_particles - 1);
 }
 
 // --- Cleanup ---

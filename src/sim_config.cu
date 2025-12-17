@@ -1,7 +1,8 @@
-#include "sim_config.h"
-
 #include <yaml-cpp/yaml.h>
+
 #include <iostream>
+
+#include "sim_config.h"
 
 using namespace std;
 

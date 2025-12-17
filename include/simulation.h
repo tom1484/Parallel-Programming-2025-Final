@@ -6,8 +6,7 @@
 
 // Allocate GPU memory for particle and cell systems
 // extra_particles: additional particles to allocate (e.g., from sources)
-void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& cfg, 
-                     int extra_particles = 0);
+void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& cfg, int extra_particles = 0);
 
 // Initialize particle positions and velocities for initial particles only
 // Source particles start as inactive (cell_id = -1)

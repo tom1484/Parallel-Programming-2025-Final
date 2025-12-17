@@ -2,19 +2,20 @@
 #define DSMC_SIM_CONFIG_H
 
 #include <string>
+
 #include "data_types.h"
 
 // --- Simulation Settings Container ---
 struct SimConfig {
     // Simulation
-    float dt;           // Time step
-    int total_steps;    // Total number of simulation steps
+    float dt;         // Time step
+    int total_steps;  // Total number of simulation steps
 
     // Grid
-    int grid_nx;        // Number of cells X
-    int grid_ny;        // Number of cells Y
-    float domain_lx;    // Domain width (meters)
-    float domain_ly;    // Domain height (meters)
+    int grid_nx;      // Number of cells X
+    int grid_ny;      // Number of cells Y
+    float domain_lx;  // Domain width (meters)
+    float domain_ly;  // Domain height (meters)
 
     // Initialization
     float init_temp;        // Initial temperature (Kelvin)

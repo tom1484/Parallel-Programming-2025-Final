@@ -1,6 +1,6 @@
-#include "sorting.h"
-
 #include <cub/cub.cuh>
+
+#include "sorting.h"
 
 // Kernel 1: Reset the particle counts for all cells to zero
 __global__ void reset_counts_kernel(int* d_counts, int num_cells) {
@@ -26,8 +26,8 @@ __global__ void count_particles_kernel(const int* __restrict__ d_cell_id, int* _
 
 // Kernel 3: Scatter - Move particles to their new sorted locations
 // Uses a "running offset" array (d_write_offsets) to determine where to write
-__global__ void reorder_particles_kernel(ParticleSystem sys, int* d_write_offsets, 
-                                         int* d_inactive_write_idx, int num_particles) {
+__global__ void reorder_particles_kernel(ParticleSystem sys, int* d_write_offsets, int* d_inactive_write_idx,
+                                         int num_particles) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx >= num_particles) return;
 
@@ -87,9 +87,8 @@ void sort_particles(ParticleSystem& p_sys, CellSystem& c_sys) {
     // ----------------------------------------------------------
 
     // Use CUB for device-side exclusive prefix sum with pre-allocated temp storage
-    cub::DeviceScan::ExclusiveSum(
-        c_sys.d_temp_storage, c_sys.temp_storage_bytes,
-        c_sys.d_cell_particle_count, c_sys.d_cell_offset, num_cells);
+    cub::DeviceScan::ExclusiveSum(c_sys.d_temp_storage, c_sys.temp_storage_bytes, c_sys.d_cell_particle_count,
+                                  c_sys.d_cell_offset, num_cells);
 
     // ----------------------------------------------------------
     // Step 3: Reorder (Scatter) Particles
@@ -101,7 +100,8 @@ void sort_particles(ParticleSystem& p_sys, CellSystem& c_sys) {
     // Use pre-allocated d_write_offsets buffer.
 
     // Initialize d_write_offsets with the clean offsets we just calculated
-    CHECK_CUDA(cudaMemcpy(c_sys.d_write_offsets, c_sys.d_cell_offset, num_cells * sizeof(int), cudaMemcpyDeviceToDevice));
+    CHECK_CUDA(
+        cudaMemcpy(c_sys.d_write_offsets, c_sys.d_cell_offset, num_cells * sizeof(int), cudaMemcpyDeviceToDevice));
 
     // Calculate where inactive particles should start writing
     // They go after all active particles: offset[last_cell] + count[last_cell]
@@ -111,15 +111,16 @@ void sort_particles(ParticleSystem& p_sys, CellSystem& c_sys) {
     int total_active;
     int last_offset, last_count;
     CHECK_CUDA(cudaMemcpy(&last_offset, &c_sys.d_cell_offset[num_cells - 1], sizeof(int), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMemcpy(&last_count, &c_sys.d_cell_particle_count[num_cells - 1], sizeof(int), cudaMemcpyDeviceToHost));
+    CHECK_CUDA(
+        cudaMemcpy(&last_count, &c_sys.d_cell_particle_count[num_cells - 1], sizeof(int), cudaMemcpyDeviceToHost));
     total_active = last_offset + last_count;
-    
+
     // Set the inactive write index to start after all active particles
     CHECK_CUDA(cudaMemcpy(c_sys.d_inactive_write_idx, &total_active, sizeof(int), cudaMemcpyHostToDevice));
 
     // Scatter particles to d_pos_sorted, d_vel_sorted, etc.
-    reorder_particles_kernel<<<p_blocks, threads>>>(p_sys, c_sys.d_write_offsets, 
-                                                     c_sys.d_inactive_write_idx, num_particles);
+    reorder_particles_kernel<<<p_blocks, threads>>>(p_sys, c_sys.d_write_offsets, c_sys.d_inactive_write_idx,
+                                                    num_particles);
     CHECK_CUDA(cudaGetLastError());
 
     // Synchronization ensures sorting is done before physics starts
