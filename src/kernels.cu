@@ -105,12 +105,20 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
         p.y += v.y * dt;
 
         // 2. Wall Interaction (CLL Model) [cite: 201]
-        // if (check_boundary(p)) { reflect(p, v); }
+        // Reflective boundaries - keep particles inside domain
+        if (p.x < 0) { p.x = -p.x; v.x = -v.x; }
+        if (p.x >= domain_lx) { p.x = 2.0 * domain_lx - p.x; v.x = -v.x; }
+        if (p.y < 0) { p.y = -p.y; v.y = -v.y; }
+        if (p.y >= domain_ly) { p.y = 2.0 * domain_ly - p.y; v.y = -v.y; }
 
-        // 3. Locate new cell
-        // int new_cell = calculate_new_cell_index(p);
-        // Store the NEW cell index back to global memory immediately
-        // so the sorter can pick it up next frame.
+        // 3. Locate new cell based on updated position
+        int cx = (int)(p.x / dx);
+        int cy = (int)(p.y / dy);
+        // Clamp to valid cell range
+        cx = max(0, min(cx, grid_nx - 1));
+        cy = max(0, min(cy, grid_ny - 1));
+        int new_cell = cy * grid_nx + cx;
+
         int global_idx = cell_start_idx + i;
 
         // Write locally updated state
