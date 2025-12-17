@@ -1,0 +1,315 @@
+# Codebase Documentation
+
+This document explains the structure and implementation details of the DSMC (Direct Simulation Monte Carlo) GPU solver.
+
+---
+
+## Project Structure
+
+```
+final-dsmc/
+├── CMakeLists.txt          # Build configuration
+├── README.md               # Project overview
+├── assets/
+│   ├── ARCHITECTURE.md     # Paper summary and algorithm explanation
+│   ├── CODEBASE.md         # This file - code structure documentation
+│   └── testcases/          # YAML configuration files for test cases
+│       └── case-00.yaml
+├── include/                # Header files
+│   ├── argparse.hpp        # Third-party argument parser (header-only)
+│   ├── config.h            # Hardware constants and type definitions
+│   ├── data_types.h        # Core data structures
+│   ├── kernels.h           # Physics kernel declarations
+│   ├── sorting.h           # Sorting pipeline declarations
+│   ├── utils.cuh           # CUDA utility macros
+│   └── visualize.h         # Visualization/dump interface
+├── src/                    # Source files
+│   ├── main.cu             # Entry point, orchestration, memory management
+│   ├── kernels.cu          # Physics kernel implementation
+│   ├── sorting.cu          # Counting sort implementation
+│   └── visualize.cu        # Data dump implementation
+├── scripts/                # Utility scripts
+│   ├── configure           # CMake configuration script
+│   ├── run_release         # Run solver with test case
+│   ├── testcase.py         # Test case runner
+│   └── visualize.py        # Python visualization and GIF generator
+└── outputs/                # Simulation output directory
+```
+
+---
+
+## Header Files (`include/`)
+
+### `config.h`
+Hardware abstraction layer with compile-time constants:
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `THREADS_PER_BLOCK` | 64 | Thread team size per cell (from paper) |
+| `SHARED_MEM_PER_BLOCK` | 6144 | Shared memory budget per block (bytes) |
+| `MAX_PARTICLES_PER_CELL` | 128 | Maximum particles in shared memory |
+| `MAX_SUB_CELLS` | 36 | Maximum collision sub-cells |
+
+**Type Definitions:**
+- `PositionType` → `double2` (high precision for small displacements)
+- `VelocityType` → `float3` (single precision to save memory)
+
+---
+
+### `data_types.h`
+Core data structures passed between host and device:
+
+#### `SimParams`
+Simulation parameters passed to kernels (lightweight, copyable):
+```cpp
+struct SimParams {
+    int grid_nx, grid_ny;       // Grid dimensions (cells)
+    float domain_lx, domain_ly; // Physical domain size (meters)
+    float cell_dx, cell_dy;     // Cell dimensions (derived)
+    float dt;                   // Time step
+};
+```
+
+#### `ParticleSystem`
+Structure of Arrays (SoA) layout for coalesced memory access:
+```cpp
+struct ParticleSystem {
+    // Current state
+    PositionType* d_pos;        // Particle positions
+    VelocityType* d_vel;        // Particle velocities
+    int* d_species;             // Species index
+    int* d_cell_id;             // Current cell assignment
+    int* d_sub_id;              // Sub-cell index (for collisions)
+    
+    // Double buffering (for sorting)
+    PositionType* d_pos_sorted;
+    VelocityType* d_vel_sorted;
+    int* d_species_sorted;
+    
+    int total_particles;
+};
+```
+
+#### `CellSystem`
+Per-cell data and sorting workspace:
+```cpp
+struct CellSystem {
+    float* d_density;           // Sampled density
+    float* d_temperature;       // Sampled temperature
+    
+    // Sorting infrastructure
+    int* d_cell_particle_count; // Histogram of particles per cell
+    int* d_cell_offset;         // Prefix sum (start index per cell)
+    int* d_write_offsets;       // Mutable offsets for scatter (pre-allocated)
+    void* d_temp_storage;       // CUB workspace (pre-allocated)
+    size_t temp_storage_bytes;
+    
+    int total_cells;
+};
+```
+
+---
+
+### `kernels.h`
+Physics kernel interface:
+```cpp
+__global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimParams params);
+```
+
+---
+
+### `sorting.h`
+Counting sort pipeline:
+```cpp
+// Kernels
+__global__ void reset_counts_kernel(int* d_counts, int num_cells);
+__global__ void count_particles_kernel(const int* d_cell_id, int* d_counts, int num_particles);
+__global__ void reorder_particles_kernel(ParticleSystem sys, int* d_write_offsets, int num_particles);
+
+// Host orchestration
+void sort_particles(ParticleSystem& p_sys, CellSystem& c_sys);
+```
+
+---
+
+### `visualize.h`
+Debug output interface:
+```cpp
+void dump_simulation(const std::string& output_dir, int timestep,
+                     const ParticleSystem& p_sys, const CellSystem& c_sys);
+```
+
+---
+
+### `utils.cuh`
+CUDA error checking macro:
+```cpp
+#define CHECK_CUDA(call) { ... }  // Exits on error with file/line info
+```
+
+---
+
+## Source Files (`src/`)
+
+### `main.cu`
+**Entry point and orchestration.** Responsibilities:
+
+1. **Argument Parsing** (using `argparse.hpp`):
+   - `-c, --config`: Path to YAML config file
+   - `-o, --output`: Output directory for dumps
+   - `-d, --dump`: Enable per-timestep dumps
+
+2. **Configuration Loading**: Reads YAML file into `SimConfig` struct
+
+3. **Memory Allocation**: 
+   - Allocates GPU arrays for particles and cells
+   - Pre-allocates sorting workspace (CUB temp storage, write offsets)
+
+4. **Initialization**: Seeds particles with random positions and Maxwellian velocities
+
+5. **Simulation Loop**:
+   ```
+   for each timestep:
+       1. Launch solve_cell_kernel (physics)
+       2. Call sort_particles (reorder by cell)
+       3. Swap double buffers
+       4. Optionally dump state
+   ```
+
+6. **Cleanup**: Frees all GPU memory
+
+---
+
+### `kernels.cu`
+**Physics kernel implementation.** Each CUDA block processes one cell independently.
+
+**Execution Flow (per cell):**
+1. **Load**: Copy particles from global → shared memory (coalesced)
+2. **Sub-cell Indexing**: Assign particles to collision sub-cells
+3. **Collision**: NTC method (placeholder - to be implemented)
+4. **Sampling**: Accumulate macroscopic properties (placeholder)
+5. **Movement**: Update positions using `p += v * dt`
+6. **Boundary**: Reflective walls (bounce particles back into domain)
+7. **Re-locate**: Calculate new cell ID based on updated position
+8. **Store**: Write back to global memory
+
+**Key Implementation Details:**
+- Uses `__shared__` arrays for particle data (reduces global memory latency)
+- Calculates new `cell_id` from position: `cell = cy * grid_nx + cx`
+- Clamps positions and cell indices to valid domain
+
+---
+
+### `sorting.cu`
+**Counting sort implementation** to reorder particles by cell ID.
+
+**Pipeline (3 stages):**
+
+| Stage | Kernel | Description |
+|-------|--------|-------------|
+| 1. Histogram | `reset_counts_kernel` | Zero the count array |
+|              | `count_particles_kernel` | Atomic increment counts per cell |
+| 2. Prefix Sum | CUB `DeviceScan::ExclusiveSum` | Calculate start offset per cell |
+| 3. Scatter | `reorder_particles_kernel` | Move particles to sorted positions |
+
+**Optimizations Applied:**
+- **Device-side prefix sum**: No host↔device transfers (uses CUB)
+- **Pre-allocated buffers**: `d_temp_storage` and `d_write_offsets` allocated once at startup
+- **Zero per-frame allocations**: Eliminates `cudaMalloc`/`cudaFree` overhead
+
+---
+
+### `visualize.cu`
+**Debug dump implementation.** Copies GPU data to host and writes ASCII files:
+
+- `{timestep}-cell.dat`: Cell ID, particle count, offset, density, temperature
+- `{timestep}-particle.dat`: Particle ID, position (x,y), velocity (x,y,z), species, cell ID
+
+---
+
+## Scripts (`scripts/`)
+
+### `visualize.py`
+Python script to create animated GIFs from dump files:
+
+```bash
+python scripts/visualize.py -i outputs/test -o animation.gif [options]
+```
+
+**Options:**
+| Flag | Description |
+|------|-------------|
+| `-i, --input` | Input directory with dump files |
+| `-o, --output` | Output GIF filename |
+| `-c, --config` | YAML config for domain dimensions |
+| `--fps` | Frames per second |
+| `--show-grid` | Draw cell grid lines |
+| `--show-velocity` | Draw velocity vectors |
+| `--color-by` | Color by: `speed`, `cell`, or `species` |
+
+---
+
+## Build System
+
+**CMake** with CUDA language support:
+
+```bash
+# Configure
+cmake -B build/Release -DCMAKE_BUILD_TYPE=Release
+
+# Build
+cmake --build build/Release
+
+# Run
+./build/Release/dsmc_solver -c assets/testcases/case-00.yaml -d -o outputs/test
+```
+
+**Dependencies:**
+- CUDA Toolkit ≥11 (includes CUB)
+- yaml-cpp (for configuration loading)
+
+---
+
+## Data Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Simulation Loop                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
+│  │  d_pos       │    │  d_pos       │    │  d_pos_sorted│       │
+│  │  d_vel       │───▶│  (updated)   │───▶│  d_vel_sorted│       │
+│  │  d_cell_id   │    │  d_cell_id   │    │  (reordered) │       │
+│  └──────────────┘    └──────────────┘    └──────────────┘       │
+│         │                   │                   │               │
+│         │            solve_cell_kernel    sort_particles        │
+│         │                   │                   │               │
+│         └───────────────────┴───────────────────┘               │
+│                             │                                   │
+│                        std::swap()                              │
+│                    (pointer swap on host)                       │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Configuration File Format (YAML)
+
+```yaml
+grid:
+  nx: 10          # Cells in X direction
+  ny: 10          # Cells in Y direction
+  lx: 0.3         # Domain width (meters)
+  ly: 0.3         # Domain height (meters)
+
+physics:
+  dt: 1.0e-6      # Time step (seconds)
+  total_steps: 20 # Number of simulation steps
+
+init:
+  temp: 200.0           # Initial temperature (Kelvin)
+  density: 1.0e13       # Number density (particles/m³)
+  particle_weight: 1.0e10  # Real atoms per simulator particle
+```
