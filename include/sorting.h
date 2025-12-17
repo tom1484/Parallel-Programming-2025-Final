@@ -3,8 +3,6 @@
 
 #include <cuda_runtime.h>
 
-#include <vector>
-
 #include "config.h"
 #include "data_types.h"
 #include "utils.cuh"

@@ -27,6 +27,10 @@ struct CellSystem {
     int* d_cell_particle_count;
     int* d_cell_offset;
     int total_cells;
+
+    int* d_write_offsets;        // Pre-allocated for scatter kernel
+    void* d_temp_storage;        // Pre-allocated for CUB scan
+    size_t temp_storage_bytes;   // Size of CUB temp storage
 };
 
 #endif  // DSMC_DATA_TYPES_H

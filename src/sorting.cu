@@ -1,5 +1,7 @@
 #include "sorting.h"
 
+#include <cub/cub.cuh>
+
 // Kernel 1: Reset the particle counts for all cells to zero
 __global__ void reset_counts_kernel(int* d_counts, int num_cells) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -75,26 +77,10 @@ void sort_particles(ParticleSystem& p_sys, CellSystem& c_sys) {
     // Step 2: Prefix Sum (Scan) to calculate Offsets
     // ----------------------------------------------------------
 
-    // NOTE: In a production environment (like CUB or Thrust), this would be
-    // a device-side scan. For pure CUDA without external libraries,
-    // a Host-side round-trip is the most robust implementation for a prototype.
-
-    // A. Download counts to Host
-    std::vector<int> h_counts(num_cells);
-    CHECK_CUDA(
-        cudaMemcpy(h_counts.data(), c_sys.d_cell_particle_count, num_cells * sizeof(int), cudaMemcpyDeviceToHost));
-
-    // B. Perform Exclusive Scan on Host
-    std::vector<int> h_offsets(num_cells);
-    int sum = 0;
-    for (int i = 0; i < num_cells; i++) {
-        h_offsets[i] = sum;
-        sum += h_counts[i];
-    }
-
-    // C. Upload offsets to Device (to d_cell_offset)
-    // These are the "Start Indices" required by the Physics Kernel
-    CHECK_CUDA(cudaMemcpy(c_sys.d_cell_offset, h_offsets.data(), num_cells * sizeof(int), cudaMemcpyHostToDevice));
+    // Use CUB for device-side exclusive prefix sum with pre-allocated temp storage
+    cub::DeviceScan::ExclusiveSum(
+        c_sys.d_temp_storage, c_sys.temp_storage_bytes,
+        c_sys.d_cell_particle_count, c_sys.d_cell_offset, num_cells);
 
     // ----------------------------------------------------------
     // Step 3: Reorder (Scatter) Particles
@@ -103,19 +89,14 @@ void sort_particles(ParticleSystem& p_sys, CellSystem& c_sys) {
     // We need a mutable copy of offsets for the reorder kernel to use as "write heads".
     // We cannot use d_cell_offset directly because atomicAdd would destroy the
     // start indices needed for the physics kernel.
-
-    int* d_write_offsets;
-    CHECK_CUDA(cudaMalloc(&d_write_offsets, num_cells * sizeof(int)));
+    // Use pre-allocated d_write_offsets buffer.
 
     // Initialize d_write_offsets with the clean offsets we just calculated
-    CHECK_CUDA(cudaMemcpy(d_write_offsets, c_sys.d_cell_offset, num_cells * sizeof(int), cudaMemcpyDeviceToDevice));
+    CHECK_CUDA(cudaMemcpy(c_sys.d_write_offsets, c_sys.d_cell_offset, num_cells * sizeof(int), cudaMemcpyDeviceToDevice));
 
     // Scatter particles to d_pos_sorted, d_vel_sorted, etc.
-    reorder_particles_kernel<<<p_blocks, threads>>>(p_sys, d_write_offsets, num_particles);
+    reorder_particles_kernel<<<p_blocks, threads>>>(p_sys, c_sys.d_write_offsets, num_particles);
     CHECK_CUDA(cudaGetLastError());
-
-    // Clean up temporary buffer
-    CHECK_CUDA(cudaFree(d_write_offsets));
 
     // Synchronization ensures sorting is done before physics starts
     CHECK_CUDA(cudaDeviceSynchronize());
