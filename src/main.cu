@@ -135,11 +135,23 @@ int main(int argc, char** argv) {
     // =========================================================================
     printf("Starting Simulation for %d steps...\n", config.total_steps);
 
+    // Calculate grid dimensions for reset/finalize kernels
+    int reset_threads = 256;
+    int reset_blocks = (c_sys.total_cells + reset_threads - 1) / reset_threads;
+
     for (int step = 0; step < config.total_steps; step++) {
+        // --- Reset Sampling Accumulators ---
+        reset_sampling_kernel<<<reset_blocks, reset_threads>>>(c_sys);
+        CHECK_CUDA(cudaGetLastError());
+
         // --- Physics Kernel ---
         // Each block processes one cell independently [cite: 62]
         // 64 threads per block (thread team) [cite: 107]
         solve_cell_kernel<<<c_sys.total_cells, THREADS_PER_BLOCK>>>(p_sys, c_sys, sim_params);
+        CHECK_CUDA(cudaGetLastError());
+
+        // --- Finalize Sampling (compute density & temperature) ---
+        finalize_sampling_kernel<<<reset_blocks, reset_threads>>>(c_sys, sim_params);
         CHECK_CUDA(cudaGetLastError());
 
         // --- Sorting Pipeline ---

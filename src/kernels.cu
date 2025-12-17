@@ -15,6 +15,71 @@ __device__ void atomicAddFloat(float* address, float val) {
     } while (assumed != old);
 }
 
+// ============================================================================
+// Reset sampling accumulators to zero before each timestep
+// ============================================================================
+__global__ void reset_sampling_kernel(CellSystem c_sys) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= c_sys.total_cells) return;
+
+    c_sys.d_density[idx] = 0.0f;
+    c_sys.d_temperature[idx] = 0.0f;
+    c_sys.d_vel_sum_x[idx] = 0.0f;
+    c_sys.d_vel_sum_y[idx] = 0.0f;
+    c_sys.d_vel_sum_z[idx] = 0.0f;
+    c_sys.d_vel_sq_sum[idx] = 0.0f;
+}
+
+// ============================================================================
+// Finalize sampling: convert accumulated sums to physical quantities
+// Called after solve_cell_kernel to compute density and temperature
+// ============================================================================
+__global__ void finalize_sampling_kernel(CellSystem c_sys, SimParams params) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= c_sys.total_cells) return;
+
+    int n_particles = c_sys.d_cell_particle_count[idx];
+    
+    if (n_particles == 0) {
+        c_sys.d_density[idx] = 0.0f;
+        c_sys.d_temperature[idx] = 0.0f;
+        return;
+    }
+
+    // Number density: n = (N_sim * Fnum) / V_cell
+    // where N_sim = simulator particles, Fnum = particle weight, V_cell = cell volume
+    float n_density = (float)n_particles * params.particle_weight / params.cell_volume;
+    c_sys.d_density[idx] = n_density;
+
+    // Temperature from kinetic theory:
+    // T = (m / 3k_B) * <c^2> where c = v - <v> is the peculiar velocity
+    // <c^2> = <v^2> - <v>^2
+    // For 3D: T = m/(3*k_B) * (<vx^2 + vy^2 + vz^2> - <vx>^2 - <vy>^2 - <vz>^2)
+    
+    float inv_n = 1.0f / (float)n_particles;
+    
+    // Mean velocities
+    float mean_vx = c_sys.d_vel_sum_x[idx] * inv_n;
+    float mean_vy = c_sys.d_vel_sum_y[idx] * inv_n;
+    float mean_vz = c_sys.d_vel_sum_z[idx] * inv_n;
+    
+    // Mean of velocity squared
+    float mean_v_sq = c_sys.d_vel_sq_sum[idx] * inv_n;
+    
+    // Peculiar velocity squared: <c^2> = <v^2> - |<v>|^2
+    float mean_c_sq = mean_v_sq - (mean_vx*mean_vx + mean_vy*mean_vy + mean_vz*mean_vz);
+    
+    // Prevent negative values due to floating point errors
+    mean_c_sq = fmaxf(mean_c_sq, 0.0f);
+    
+    // Temperature: T = m * <c^2> / (3 * k_B)
+    // Boltzmann constant k_B = 1.380649e-23 J/K
+    const float k_B = 1.380649e-23f;
+    float temperature = params.particle_mass * mean_c_sq / (3.0f * k_B);
+    
+    c_sys.d_temperature[idx] = temperature;
+}
+
 // Check if a particle trajectory crosses a line segment
 // Returns true if intersection occurs, and sets t to the parametric intersection point
 __device__ bool segment_intersection(
@@ -164,10 +229,48 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     __syncthreads();
 
     // --- Step 4: Sampling [cite: 122] ---
-    // Accumulate macroscopic moments
+    // Accumulate velocity moments for macroscopic properties
+    // Use shared memory reduction to minimize atomic operations
+    __shared__ float s_vel_sum_x;
+    __shared__ float s_vel_sum_y;
+    __shared__ float s_vel_sum_z;
+    __shared__ float s_vel_sq_sum;
+
+    if (tid == 0) {
+        s_vel_sum_x = 0.0f;
+        s_vel_sum_y = 0.0f;
+        s_vel_sum_z = 0.0f;
+        s_vel_sq_sum = 0.0f;
+    }
+    __syncthreads();
+
+    // Each thread accumulates its portion
+    float local_vx_sum = 0.0f;
+    float local_vy_sum = 0.0f;
+    float local_vz_sum = 0.0f;
+    float local_vsq_sum = 0.0f;
+
     for (int i = tid; i < s_num_particles; i += THREADS_PER_BLOCK) {
-        // Atomic add to global cell properties (or local shared reduction first)
-        // atomicAddFloat(&c_sys.d_density[cell_idx], mass);
+        VelocityType v = s_vel[i];
+        local_vx_sum += v.x;
+        local_vy_sum += v.y;
+        local_vz_sum += v.z;
+        local_vsq_sum += v.x*v.x + v.y*v.y + v.z*v.z;
+    }
+
+    // Atomic add to shared memory accumulators
+    atomicAdd(&s_vel_sum_x, local_vx_sum);
+    atomicAdd(&s_vel_sum_y, local_vy_sum);
+    atomicAdd(&s_vel_sum_z, local_vz_sum);
+    atomicAdd(&s_vel_sq_sum, local_vsq_sum);
+    __syncthreads();
+
+    // Thread 0 writes final sums to global memory
+    if (tid == 0) {
+        c_sys.d_vel_sum_x[cell_idx] = s_vel_sum_x;
+        c_sys.d_vel_sum_y[cell_idx] = s_vel_sum_y;
+        c_sys.d_vel_sum_z[cell_idx] = s_vel_sum_z;
+        c_sys.d_vel_sq_sum[cell_idx] = s_vel_sq_sum;
     }
     __syncthreads();
 

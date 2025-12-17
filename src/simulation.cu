@@ -43,6 +43,12 @@ void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& 
     CHECK_CUDA(cudaMalloc(&c_sys.d_cell_offset, c_sys.total_cells * sizeof(int)));
     CHECK_CUDA(cudaMalloc(&c_sys.d_write_offsets, c_sys.total_cells * sizeof(int)));
 
+    // Velocity accumulator arrays for macroscopic sampling
+    CHECK_CUDA(cudaMalloc(&c_sys.d_vel_sum_x, c_sys.total_cells * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&c_sys.d_vel_sum_y, c_sys.total_cells * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&c_sys.d_vel_sum_z, c_sys.total_cells * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&c_sys.d_vel_sq_sum, c_sys.total_cells * sizeof(float)));
+
     // Pre-allocate CUB temp storage (query size first)
     c_sys.d_temp_storage = nullptr;
     c_sys.temp_storage_bytes = 0;
@@ -175,6 +181,10 @@ void free_system(ParticleSystem& p_sys, CellSystem& c_sys) {
     // Free cell system
     cudaFree(c_sys.d_density);
     cudaFree(c_sys.d_temperature);
+    cudaFree(c_sys.d_vel_sum_x);
+    cudaFree(c_sys.d_vel_sum_y);
+    cudaFree(c_sys.d_vel_sum_z);
+    cudaFree(c_sys.d_vel_sq_sum);
     cudaFree(c_sys.d_cell_particle_count);
     cudaFree(c_sys.d_cell_offset);
     cudaFree(c_sys.d_write_offsets);

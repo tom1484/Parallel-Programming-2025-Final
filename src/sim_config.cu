@@ -42,5 +42,14 @@ SimParams make_sim_params(const SimConfig& cfg) {
     params.cell_dx = cfg.domain_lx / cfg.grid_nx;
     params.cell_dy = cfg.domain_ly / cfg.grid_ny;
     params.dt = cfg.dt;
+
+    // Sampling parameters
+    params.particle_weight = cfg.particle_weight;
+    // Cell volume (2D simulation assumes unit depth = 1.0 m)
+    params.cell_volume = params.cell_dx * params.cell_dy * 1.0f;
+    // Molecular mass for Argon (default gas species)
+    // Argon: 39.948 amu = 39.948 * 1.66054e-27 kg = 6.6335e-26 kg
+    params.particle_mass = 6.6335e-26f;
+
     return params;
 }
