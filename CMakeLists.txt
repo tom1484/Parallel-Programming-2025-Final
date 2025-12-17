@@ -28,6 +28,8 @@ find_package(yaml-cpp REQUIRED)
 # Add executable
 add_executable(dsmc_solver
     src/main.cu
+    src/sim_config.cu
+    src/simulation.cu
     src/kernels.cu
     src/sorting.cu
     src/visualize.cu

@@ -11,21 +11,25 @@ final-dsmc/
 ├── CMakeLists.txt          # Build configuration
 ├── README.md               # Project overview
 ├── assets/
-│   ├── ARCHITECTURE.md     # Paper summary and algorithm explanation
+│   ├── ALGORITHM.md        # Paper summary and algorithm explanation
 │   ├── CODEBASE.md         # This file - code structure documentation
 │   └── testcases/          # YAML configuration files for test cases
-│       └── case-00.yaml
+│       └── case-00/
 ├── include/                # Header files
 │   ├── argparse.hpp        # Third-party argument parser (header-only)
 │   ├── config.h            # Hardware constants and type definitions
 │   ├── data_types.h        # Core data structures
+│   ├── sim_config.h        # Simulation configuration struct and loader
+│   ├── simulation.h        # System allocation and initialization
 │   ├── kernels.h           # Physics kernel declarations
 │   ├── geometry.h          # Geometry loading declarations
 │   ├── sorting.h           # Sorting pipeline declarations
 │   ├── utils.cuh           # CUDA utility macros
 │   └── visualize.h         # Visualization/dump interface
 ├── src/                    # Source files
-│   ├── main.cu             # Entry point, orchestration, memory management
+│   ├── main.cu             # Entry point and orchestration
+│   ├── sim_config.cu       # YAML config loading
+│   ├── simulation.cu       # GPU allocation, particle initialization, cleanup
 │   ├── kernels.cu          # Physics kernel implementation
 │   ├── sorting.cu          # Counting sort implementation
 │   ├── geometry.cu         # Solid object geometry loading
@@ -33,8 +37,10 @@ final-dsmc/
 ├── scripts/                # Utility scripts
 │   ├── configure           # CMake configuration script
 │   ├── run_release         # Run solver with test case
-│   ├── testcase.py         # Test case runner
-│   └── visualize.py        # Python visualization and GIF generator
+│   ├── visualize.py        # Python visualization and GIF generator
+│   └── geometry/           # Geometry generation scripts
+│       ├── base.py         # Core geometry data structures
+│       └── circle.py       # Circle geometry generator
 └── outputs/                # Simulation output directory
 ```
 
@@ -127,6 +133,43 @@ struct CellSystem {
 
 ---
 
+### `sim_config.h`
+Simulation configuration loading:
+```cpp
+struct SimConfig {
+    float dt;               // Time step
+    int total_steps;        // Total simulation steps
+    int grid_nx, grid_ny;   // Grid dimensions
+    float domain_lx, domain_ly;  // Domain size (meters)
+    float init_temp;        // Initial temperature (Kelvin)
+    float init_density;     // Number density (particles/m³)
+    float particle_weight;  // Real atoms per simulator particle
+};
+
+// Load configuration from YAML file
+SimConfig load_config(const std::string& path);
+
+// Create SimParams (kernel-compatible) from SimConfig
+SimParams make_sim_params(const SimConfig& cfg);
+```
+
+---
+
+### `simulation.h`
+System allocation and initialization:
+```cpp
+// Allocate GPU memory for particle and cell systems
+void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& cfg);
+
+// Initialize particle positions and velocities (avoids solid objects)
+void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimConfig& cfg);
+
+// Free all GPU memory
+void free_system(ParticleSystem& p_sys, CellSystem& c_sys);
+```
+
+---
+
 ### `geometry.h`
 Solid object geometry loading interface:
 ```cpp
@@ -181,34 +224,46 @@ CUDA error checking macro:
 ## Source Files (`src/`)
 
 ### `main.cu`
-**Entry point and orchestration.** Responsibilities:
+**Entry point and orchestration.** Clean, minimal main file with clear sections:
 
 1. **Argument Parsing** (using `argparse.hpp`):
    - `-c, --config`: Path to YAML config file
    - `-o, --output`: Output directory for dumps
-   - `-d, --dump`: Enable per-timestep dumps
    - `-g, --geometry`: Path to geometry file (optional)
+   - `-d, --dump`: Enable visualization dumps
+   - `--dump-start`: First timestep to dump (default: 0)
+   - `--dump-max`: Maximum dumps (default: 100)
+   - `--dump-skip`: Dump every N timesteps (default: 1)
 
-2. **Configuration Loading**: Reads YAML file into `SimConfig` struct
+2. **Configuration Loading**: Calls `load_config()` and `make_sim_params()`
 
-3. **Memory Allocation**: 
-   - Allocates GPU arrays for particles and cells
-   - Pre-allocates sorting workspace (CUB temp storage, write offsets)
+3. **System Setup**: Calls `allocate_system()`, `load_geometry()`, `init_simulation()`
 
-4. **Initialization**: Seeds particles with random positions and Maxwellian velocities
-
-5. **Geometry Loading**: If geometry file provided, loads segment data and uploads to GPU
-
-6. **Simulation Loop**:
+4. **Simulation Loop**:
    ```
    for each timestep:
        1. Launch solve_cell_kernel (physics)
        2. Call sort_particles (reorder by cell)
        3. Swap double buffers
-       4. Optionally dump state
+       4. Optionally dump state (based on dump settings)
    ```
 
-7. **Cleanup**: Frees all GPU memory
+5. **Cleanup**: Calls `free_system()`
+
+---
+
+### `sim_config.cu`
+**YAML configuration loading.** Parses config files using yaml-cpp library.
+
+---
+
+### `simulation.cu`
+**System allocation and initialization.**
+
+- `allocate_system()`: Allocates all GPU memory for particles and cells
+- `init_simulation()`: Initializes particle positions (avoiding solid objects) and velocities
+- `free_system()`: Frees all GPU memory
+- `is_inside_segment()`: Helper to check if a point is inside a solid object
 
 ---
 
