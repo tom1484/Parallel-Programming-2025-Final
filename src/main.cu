@@ -1,0 +1,226 @@
+#include <yaml-cpp/yaml.h>
+
+#include <iostream>
+#include <random>
+#include <vector>
+
+#include "config.h"
+#include "data_types.h"
+#include "kernels.h"
+#include "sorting.h"
+#include "utils.cuh"
+
+using namespace std;
+
+// --- Simulation Settings Container ---
+struct SimConfig {
+    // Grid
+    int grid_nx;      // Number of cells X
+    int grid_ny;      // Number of cells Y
+    float domain_lx;  // Domain width (meters)
+    float domain_ly;  // Domain height (meters)
+
+    // Physics
+    float dt;  // dt
+    int total_steps;
+
+    // Initialization
+    float init_temp;        // Kelvin
+    float init_density;     // Number density
+    float particle_weight;  // Real atoms per simulator particle
+};
+
+// --- Config Loader ---
+SimConfig load_config(const string& path) {
+    SimConfig cfg;
+    try {
+        YAML::Node config = YAML::LoadFile(path);
+
+        cfg.grid_nx = config["grid"]["nx"].as<int>();
+        cfg.grid_ny = config["grid"]["ny"].as<int>();
+        cfg.domain_lx = config["grid"]["lx"].as<float>();
+        cfg.domain_ly = config["grid"]["ly"].as<float>();
+
+        cfg.dt = config["physics"]["dt"].as<float>();
+        cfg.total_steps = config["physics"]["total_steps"].as<int>();
+
+        cfg.init_temp = config["init"]["temp"].as<float>();
+        cfg.init_density = config["init"]["density"].as<float>();
+        cfg.particle_weight = config["init"]["particle_weight"].as<float>();
+
+        cout << "Loaded Config from " << path << "\n";
+        cout << "  Grid: " << cfg.grid_nx << "x" << cfg.grid_ny << "\n";
+        cout << "  Steps: " << cfg.total_steps << "\n";
+
+    } catch (const YAML::Exception& e) {
+        cerr << "Error loading config: " << e.what() << "\n";
+        exit(1);
+    }
+    return cfg;
+}
+
+// --- 2. Allocation Helper ---
+void allocate_system(ParticleSystem& p, CellSystem& c, const SimConfig& cfg) {
+    // Calculate totals
+    c.total_cells = cfg.grid_nx * cfg.grid_ny;
+
+    // Estimate total particles based on density and volume
+    // (In practice, allocate extra buffer for inflow)
+    double volume = (cfg.domain_lx * cfg.domain_ly);
+    int est_particles = (int)((cfg.init_density * volume) / cfg.particle_weight);
+    int buffer_size = est_particles * 1.5;  // 50% buffer for fluctuation
+
+    p.total_particles = est_particles;
+
+    // --- GPU Allocations (Particle System) ---
+    // Note: We use Double Precision for Position [cite: 173]
+    CHECK_CUDA(cudaMalloc(&p.d_pos, buffer_size * sizeof(PositionType)));
+    CHECK_CUDA(cudaMalloc(&p.d_vel, buffer_size * sizeof(VelocityType)));
+    CHECK_CUDA(cudaMalloc(&p.d_species, buffer_size * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&p.d_cell_id, buffer_size * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&p.d_sub_id, buffer_size * sizeof(int)));
+
+    // Sorted Arrays (Double Buffering)
+    CHECK_CUDA(cudaMalloc(&p.d_pos_sorted, buffer_size * sizeof(PositionType)));
+    CHECK_CUDA(cudaMalloc(&p.d_vel_sorted, buffer_size * sizeof(VelocityType)));
+    CHECK_CUDA(cudaMalloc(&p.d_species_sorted, buffer_size * sizeof(int)));
+
+    // --- GPU Allocations (Cell System) ---
+    CHECK_CUDA(cudaMalloc(&c.d_density, c.total_cells * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&c.d_temperature, c.total_cells * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&c.d_cell_particle_count, c.total_cells * sizeof(int)));
+    CHECK_CUDA(cudaMalloc(&c.d_cell_offset, c.total_cells * sizeof(int)));
+
+    printf("Allocated System: %d cells, capacity for %d particles.\n", c.total_cells, buffer_size);
+}
+
+// --- 3. Initialization Helper (Host Side) ---
+void init_simulation(ParticleSystem& p, const SimConfig& cfg) {
+    vector<PositionType> h_pos(p.total_particles);
+    vector<VelocityType> h_vel(p.total_particles);
+    vector<int> h_cell_id(p.total_particles);
+
+    mt19937 gen(1234);
+    uniform_real_distribution<double> dist_x(0.0, cfg.domain_lx);
+    uniform_real_distribution<double> dist_y(0.0, cfg.domain_ly);
+    normal_distribution<float> dist_v(0.0f, 300.0f);  // Approx thermal velocity
+
+    float dx = cfg.domain_lx / cfg.grid_nx;
+    float dy = cfg.domain_ly / cfg.grid_ny;
+
+    for (int i = 0; i < p.total_particles; i++) {
+        // Random Position
+        h_pos[i] = make_double2(dist_x(gen), dist_y(gen));
+
+        // Maxwellian Velocity
+        h_vel[i] = make_float3(dist_v(gen), dist_v(gen), 0.0f);
+
+        // Calculate Initial Cell ID
+        int cx = (int)(h_pos[i].x / dx);
+        int cy = (int)(h_pos[i].y / dy);
+        h_cell_id[i] = cy * cfg.grid_nx + cx;
+    }
+
+    // Copy to GPU
+    CHECK_CUDA(cudaMemcpy(p.d_pos, h_pos.data(), p.total_particles * sizeof(PositionType), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(p.d_vel, h_vel.data(), p.total_particles * sizeof(VelocityType), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(p.d_cell_id, h_cell_id.data(), p.total_particles * sizeof(int), cudaMemcpyHostToDevice));
+
+    // Important: Initialize sorting buffers to 0 to avoid artifacts
+    CHECK_CUDA(cudaMemset(p.d_cell_id, 0, p.total_particles * sizeof(int)));
+}
+
+int main(int argc, char** argv) {
+    // --- Parse Arguments ---
+    string config_path = "config.yaml";
+    if (argc > 1) {
+        config_path = argv[1];
+    } else {
+        cout << "Usage: ./dsmc_solver [config.yaml]\n";
+        cout << "Defaulting to 'config.yaml'\n";
+    }
+
+    // --- Load Config ---
+    SimConfig config = load_config(config_path);
+    printf("Simulation Configured: %dx%d grid, dt=%.2e, steps=%d\n",
+           config.grid_nx, config.grid_ny, config.dt, config.total_steps);
+
+    return 0;
+
+    ParticleSystem p_sys;
+    CellSystem c_sys;
+
+    // --- Setup ---
+    allocate_system(p_sys, c_sys, config);
+    init_simulation(p_sys, config);
+
+    // Initial Sort to ensure memory Coalescing before first step
+    // (Particles generated randomly on CPU are not sorted by cell)
+    sort_particles(p_sys, c_sys);
+    swap(p_sys.d_pos, p_sys.d_pos_sorted);
+    swap(p_sys.d_vel, p_sys.d_vel_sorted);
+    swap(p_sys.d_species, p_sys.d_species_sorted);
+
+    // --- Time Loop ---
+    printf("Starting Simulation for %d steps...\n", config.total_steps);
+
+    for (int step = 0; step < config.total_steps; step++) {
+        // --- CORRECTED KERNEL CALL ---
+        // Threads per block fixed at 64 [cite: 107]
+        // Grid size = Total Cells (One block per cell) [cite: 95]
+        solve_cell_kernel<<<c_sys.total_cells, THREADS_PER_BLOCK>>>(p_sys, c_sys, config.dt, c_sys.total_cells);
+        CHECK_CUDA(cudaGetLastError());  // Catch launch errors
+
+        // --- Sorting / Indexing Pipeline ---
+        // 1. Reset cell counters
+        CHECK_CUDA(cudaMemset(c_sys.d_cell_particle_count, 0, c_sys.total_cells * sizeof(int)));
+
+        // 2. Count particles per cell
+        int threads = 256;
+        int blocks = (p_sys.total_particles + threads - 1) / threads;
+        count_particles_kernel<<<blocks, threads>>>(p_sys.d_cell_id, c_sys.d_cell_particle_count,
+                                                    p_sys.total_particles);
+
+        // 3. Prefix Sum (Host wrapper for thrust::exclusive_scan or custom)
+        // Note: For pure CUDA, you'd call a device scan kernel here.
+        // For prototype, we copy counts to host, scan, copy back (slow but simple).
+        vector<int> h_counts(c_sys.total_cells);
+        vector<int> h_offsets(c_sys.total_cells);
+        cudaMemcpy(h_counts.data(), c_sys.d_cell_particle_count, c_sys.total_cells * sizeof(int),
+                   cudaMemcpyDeviceToHost);
+
+        int sum = 0;
+        for (int i = 0; i < c_sys.total_cells; i++) {
+            h_offsets[i] = sum;
+            sum += h_counts[i];
+        }
+        cudaMemcpy(c_sys.d_cell_offset, h_offsets.data(), c_sys.total_cells * sizeof(int), cudaMemcpyHostToDevice);
+
+        // 4. Reorder (Scatter)
+        // Make a copy of offsets because atomicAdd will modify them
+        int* d_temp_offsets;
+        cudaMalloc(&d_temp_offsets, c_sys.total_cells * sizeof(int));
+        cudaMemcpy(d_temp_offsets, c_sys.d_cell_offset, c_sys.total_cells * sizeof(int), cudaMemcpyDeviceToDevice);
+
+        reorder_particles_kernel<<<blocks, threads>>>(p_sys, d_temp_offsets, p_sys.total_particles);
+        cudaFree(d_temp_offsets);
+
+        // 5. Ping-Pong Buffers
+        swap(p_sys.d_pos, p_sys.d_pos_sorted);
+        swap(p_sys.d_vel, p_sys.d_vel_sorted);
+        swap(p_sys.d_species, p_sys.d_species_sorted);
+    }
+
+    // --- Cleanup ---
+    cudaFree(p_sys.d_pos);
+    cudaFree(p_sys.d_pos_sorted);
+    cudaFree(p_sys.d_vel);
+    cudaFree(p_sys.d_vel_sorted);
+    cudaFree(p_sys.d_species);
+    cudaFree(p_sys.d_species_sorted);
+    cudaFree(p_sys.d_cell_id);
+    cudaFree(c_sys.d_cell_particle_count);
+    cudaFree(c_sys.d_cell_offset);
+
+    return 0;
+}

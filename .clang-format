@@ -1,0 +1,15 @@
+# Use Google style as base
+BasedOnStyle: Google
+
+# Use 4 spaces for indentation
+IndentWidth: 4
+
+# Never use tab characters
+UseTab: Never
+
+# (Other optional overrides you may want)
+# TabWidth: 4
+# ContinuationIndentWidth: 4
+ColumnLimit: 120
+# AllowShortFunctionsOnASingleLine: InlineOnly
+# etc.

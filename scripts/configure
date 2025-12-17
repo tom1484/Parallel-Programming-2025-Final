@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+echo "Configuring build directories..."
+cmake -B build/Debug -DCMAKE_BUILD_TYPE=Debug
+echo ""
+
+echo "Configuring release directories..."
+cmake -B build/Release -DCMAKE_BUILD_TYPE=Release
+echo ""

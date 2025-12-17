@@ -1,0 +1,14 @@
+grid:
+  nx: 10
+  ny: 10
+  lx: 0.3
+  ly: 0.3
+
+physics:
+  dt: 1.0e-8
+  total_steps: 10
+
+init:
+  temp: 200.0
+  density: 1.0e13
+  particle_weight: 1.0e10
