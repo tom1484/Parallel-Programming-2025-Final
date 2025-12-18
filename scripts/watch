@@ -1,0 +1,1 @@
+watch -n 2 "squeue -j $1 -o '%.18i %.9T %.10M %.9l %R'"
