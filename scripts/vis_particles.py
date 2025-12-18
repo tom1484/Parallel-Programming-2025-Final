@@ -81,15 +81,15 @@ def load_particle_data(filepath):
     data = np.loadtxt(filepath, comments="#")
     if data.ndim == 1:
         data = data.reshape(1, -1)
+    # Format: particle_id pos_x pos_y vel_x vel_y species cell_id
     return {
         "id": data[:, 0].astype(int),
         "pos_x": data[:, 1],
         "pos_y": data[:, 2],
         "vel_x": data[:, 3],
         "vel_y": data[:, 4],
-        "vel_z": data[:, 5],
-        "species": data[:, 6].astype(int),
-        "cell_id": data[:, 7].astype(int),
+        "species": data[:, 5].astype(int),
+        "cell_id": data[:, 6].astype(int),
     }
 
 
@@ -230,6 +230,9 @@ def infer_domain(particles_list):
 def create_animation(input_dir, output_file, config=None, geometry=None, fps=10, dpi=100,
                      show_grid=False, show_velocity=False, color_by="speed"):
     """Create GIF animation from dump files."""
+
+    output_file = os.path.join(input_dir, output_file)
+    input_dir = os.path.join(input_dir, "visualization")
     
     # Find all timesteps
     timesteps = find_timesteps(input_dir)
@@ -268,7 +271,7 @@ def create_animation(input_dir, output_file, config=None, geometry=None, fps=10,
     # Calculate speed range for consistent coloring
     all_speeds = []
     for p in particles_list:
-        speeds = np.sqrt(p["vel_x"]**2 + p["vel_y"]**2 + p["vel_z"]**2)
+        speeds = np.sqrt(p["vel_x"]**2 + p["vel_y"]**2)
         all_speeds.extend(speeds)
     speed_min, speed_max = min(all_speeds), max(all_speeds)
     
@@ -306,7 +309,7 @@ def create_animation(input_dir, output_file, config=None, geometry=None, fps=10,
         
         # Determine colors
         if color_by == "speed":
-            speeds = np.sqrt(particles["vel_x"]**2 + particles["vel_y"]**2 + particles["vel_z"]**2)
+            speeds = np.sqrt(particles["vel_x"]**2 + particles["vel_y"]**2)
             colors = speeds
             cmap = "coolwarm"
             vmin, vmax = speed_min, speed_max
