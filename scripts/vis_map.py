@@ -285,7 +285,7 @@ def compute_global_range(tensor, percentile_low=1, percentile_high=99):
 
 def create_frame(grid_data, timestep, title, cmap, vmin, vmax, extent, 
                  geometry=None, log_scale=False, dpi=100, lx=1.0, ly=1.0, 
-                 downsample_factor=1):
+                 downsample_factor=1, cbar_ticks=None):
     """Create a single frame as PIL Image."""
     fig, ax = plt.subplots(figsize=(8, 6))
     
@@ -308,6 +308,11 @@ def create_frame(grid_data, timestep, title, cmap, vmin, vmax, extent,
                        cmap=cmap, vmin=vmin, vmax=vmax, aspect="equal")
     
     cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+    
+    # Fix colorbar ticks across all frames for consistent appearance
+    if cbar_ticks is not None:
+        cbar.set_ticks(cbar_ticks)
+    
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Y (m)")
     ax.set_title(f"{title} - Timestep {timestep}")
@@ -340,6 +345,16 @@ def create_gif(grids, timesteps, output_path, title, cmap, vmin, vmax, extent,
     
     print(f"Creating {title} GIF with {len(timesteps)} frames...")
     
+    # Compute fixed colorbar ticks for consistent appearance across frames
+    if log_scale:
+        # Log-spaced ticks
+        log_vmin = np.log10(max(vmin, 1e-10))
+        log_vmax = np.log10(vmax)
+        cbar_ticks = np.logspace(log_vmin, log_vmax, num=6)
+    else:
+        # Linear ticks
+        cbar_ticks = np.linspace(vmin, vmax, num=6)
+    
     for i, (grid, ts) in enumerate(zip(grids, timesteps)):
         if (i + 1) % 10 == 0 or i == 0:
             print(f"  Processing frame {i + 1}/{len(timesteps)}...")
@@ -357,7 +372,8 @@ def create_gif(grids, timesteps, output_path, title, cmap, vmin, vmax, extent,
             dpi=dpi,
             lx=lx,
             ly=ly,
-            downsample_factor=downsample_factor
+            downsample_factor=downsample_factor,
+            cbar_ticks=cbar_ticks
         )
         frames.append(frame)
     
