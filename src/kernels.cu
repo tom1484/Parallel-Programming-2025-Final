@@ -26,7 +26,6 @@ __global__ void reset_sampling_kernel(CellSystem c_sys) {
     c_sys.d_temperature[idx] = 0.0f;
     c_sys.d_vel_sum_x[idx] = 0.0f;
     c_sys.d_vel_sum_y[idx] = 0.0f;
-    c_sys.d_vel_sum_z[idx] = 0.0f;
     c_sys.d_vel_sq_sum[idx] = 0.0f;
 }
 
@@ -52,30 +51,29 @@ __global__ void finalize_sampling_kernel(CellSystem c_sys, SimParams params) {
     c_sys.d_density[idx] = n_density;
 
     // Temperature from kinetic theory:
-    // T = (m / 3k_B) * <c^2> where c = v - <v> is the peculiar velocity
+    // T = (m / 2k_B) * <c^2> where c = v - <v> is the peculiar velocity (2D)
     // <c^2> = <v^2> - <v>^2
-    // For 3D: T = m/(3*k_B) * (<vx^2 + vy^2 + vz^2> - <vx>^2 - <vy>^2 - <vz>^2)
+    // For 2D: T = m/(2*k_B) * (<vx^2 + vy^2> - <vx>^2 - <vy>^2)
 
     float inv_n = 1.0f / (float)n_particles;
 
     // Mean velocities
     float mean_vx = c_sys.d_vel_sum_x[idx] * inv_n;
     float mean_vy = c_sys.d_vel_sum_y[idx] * inv_n;
-    float mean_vz = c_sys.d_vel_sum_z[idx] * inv_n;
 
     // Mean of velocity squared
     float mean_v_sq = c_sys.d_vel_sq_sum[idx] * inv_n;
 
     // Peculiar velocity squared: <c^2> = <v^2> - |<v>|^2
-    float mean_c_sq = mean_v_sq - (mean_vx * mean_vx + mean_vy * mean_vy + mean_vz * mean_vz);
+    float mean_c_sq = mean_v_sq - (mean_vx * mean_vx + mean_vy * mean_vy);
 
     // Prevent negative values due to floating point errors
     mean_c_sq = fmaxf(mean_c_sq, 0.0f);
 
-    // Temperature: T = m * <c^2> / (3 * k_B)
+    // Temperature: T = m * <c^2> / (2 * k_B) for 2D
     // Boltzmann constant k_B = 1.380649e-23 J/K
     const float k_B = 1.380649e-23f;
-    float temperature = params.particle_mass * mean_c_sq / (3.0f * k_B);
+    float temperature = params.particle_mass * mean_c_sq / (2.0f * k_B);
 
     c_sys.d_temperature[idx] = temperature;
 }
@@ -231,13 +229,11 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     // Use shared memory reduction to minimize atomic operations
     __shared__ float s_vel_sum_x;
     __shared__ float s_vel_sum_y;
-    __shared__ float s_vel_sum_z;
     __shared__ float s_vel_sq_sum;
 
     if (tid == 0) {
         s_vel_sum_x = 0.0f;
         s_vel_sum_y = 0.0f;
-        s_vel_sum_z = 0.0f;
         s_vel_sq_sum = 0.0f;
     }
     __syncthreads();
@@ -245,21 +241,18 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     // Each thread accumulates its portion
     float local_vx_sum = 0.0f;
     float local_vy_sum = 0.0f;
-    float local_vz_sum = 0.0f;
     float local_vsq_sum = 0.0f;
 
     for (int i = tid; i < s_num_particles; i += THREADS_PER_BLOCK) {
         VelocityType v = s_vel[i];
         local_vx_sum += v.x;
         local_vy_sum += v.y;
-        local_vz_sum += v.z;
-        local_vsq_sum += v.x * v.x + v.y * v.y + v.z * v.z;
+        local_vsq_sum += v.x * v.x + v.y * v.y;
     }
 
     // Atomic add to shared memory accumulators
     atomicAdd(&s_vel_sum_x, local_vx_sum);
     atomicAdd(&s_vel_sum_y, local_vy_sum);
-    atomicAdd(&s_vel_sum_z, local_vz_sum);
     atomicAdd(&s_vel_sq_sum, local_vsq_sum);
     __syncthreads();
 
@@ -267,7 +260,6 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     if (tid == 0) {
         c_sys.d_vel_sum_x[cell_idx] = s_vel_sum_x;
         c_sys.d_vel_sum_y[cell_idx] = s_vel_sum_y;
-        c_sys.d_vel_sum_z[cell_idx] = s_vel_sum_z;
         c_sys.d_vel_sq_sum[cell_idx] = s_vel_sq_sum;
     }
     __syncthreads();

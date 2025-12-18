@@ -1,7 +1,7 @@
 #ifndef DSMC_CONFIG_H
 #define DSMC_CONFIG_H
 
-#include <vector_types.h>  // For double2, float3
+#include <vector_types.h>  // For double2, float2
 
 // --- Hardware Abstraction ---
 // Paper uses 64 threads per block (one cell) [cite: 107]
@@ -20,6 +20,6 @@
 
 // Precision abstraction
 typedef double2 PositionType;  // Paper uses double for position [cite: 172]
-typedef float3 VelocityType;   // Paper uses float for velocity [cite: 171]
+typedef float2 VelocityType;   // 2D simulation: only vx, vy needed
 
 #endif  // DSMC_CONFIG_H
