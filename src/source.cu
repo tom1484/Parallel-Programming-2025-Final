@@ -79,16 +79,9 @@ __global__ void emit_particles_kernel(
     u2 = fmaxf(u2, 1e-10f);
     float v_tangent = v_th * sqrtf(-2.0f * logf(u2)) * cosf(2.0f * M_PI * u3);
 
-    // Z component: Standard Maxwellian
-    float u4 = curand_uniform(&local_state);
-    float u5 = curand_uniform(&local_state);
-    u4 = fmaxf(u4, 1e-10f);
-    float v_z = v_th * sqrtf(-2.0f * logf(u4)) * cosf(2.0f * M_PI * u5);
-
-    // Convert to Cartesian velocities
+    // Convert to Cartesian velocities (2D)
     float vel_x = v_normal * dir_x + v_tangent * tan_x;
     float vel_y = v_normal * dir_y + v_tangent * tan_y;
-    float vel_z = v_z;
 
     // ========================================================================
     // Calculate cell ID
@@ -103,7 +96,7 @@ __global__ void emit_particles_kernel(
     // Write particle data (activate the particle)
     // ========================================================================
     p_sys.d_pos[particle_idx] = make_double2((double)pos_x, (double)pos_y);
-    p_sys.d_vel[particle_idx] = make_float3(vel_x, vel_y, vel_z);
+    p_sys.d_vel[particle_idx] = make_float2(vel_x, vel_y);
     p_sys.d_species[particle_idx] = 0;        // Single species
     p_sys.d_cell_id[particle_idx] = cell_id;  // Activate by setting valid cell ID
 

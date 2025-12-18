@@ -56,8 +56,7 @@ struct CellSystem {
     // Velocity sums for sampling (to compute mean velocity, then temperature)
     float* d_vel_sum_x;   // Sum of vx for each cell
     float* d_vel_sum_y;   // Sum of vy for each cell
-    float* d_vel_sum_z;   // Sum of vz for each cell
-    float* d_vel_sq_sum;  // Sum of (vx^2 + vy^2 + vz^2) for each cell
+    float* d_vel_sq_sum;  // Sum of (vx^2 + vy^2) for each cell
 
     // Sorting helpers
     int* d_cell_particle_count;

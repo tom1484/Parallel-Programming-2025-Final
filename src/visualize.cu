@@ -66,12 +66,12 @@ static void dump_particle_impl(const std::string& particle_path, const std::stri
     }
 
     particle_file << "# Particle data" << header_info << "\n";
-    particle_file << "# particle_id pos_x pos_y vel_x vel_y vel_z species cell_id\n";
+    particle_file << "# particle_id pos_x pos_y vel_x vel_y species cell_id\n";
     particle_file << std::fixed << std::setprecision(8);
 
     for (int i = 0; i < p_sys.total_particles; i++) {
         particle_file << i << " " << h_pos[i].x << " " << h_pos[i].y << " " << h_vel[i].x << " " << h_vel[i].y << " "
-                      << h_vel[i].z << " " << h_species[i] << " " << h_cell_id[i] << "\n";
+                      << h_species[i] << " " << h_cell_id[i] << "\n";
     }
     particle_file.close();
 }

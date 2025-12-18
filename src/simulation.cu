@@ -50,7 +50,6 @@ void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& 
     // Velocity accumulator arrays for macroscopic sampling
     CHECK_CUDA(cudaMalloc(&c_sys.d_vel_sum_x, c_sys.total_cells * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&c_sys.d_vel_sum_y, c_sys.total_cells * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&c_sys.d_vel_sum_z, c_sys.total_cells * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&c_sys.d_vel_sq_sum, c_sys.total_cells * sizeof(float)));
 
     // Pre-allocate CUB temp storage (query size first)
@@ -149,8 +148,8 @@ void init_simulation(ParticleSystem& p_sys, const CellSystem& c_sys, const SimCo
 
         h_pos[i] = make_double2(px, py);
 
-        // Maxwellian Velocity
-        h_vel[i] = make_float3(dist_v(gen), dist_v(gen), 0.0f);
+        // Maxwellian Velocity (2D)
+        h_vel[i] = make_float2(dist_v(gen), dist_v(gen));
 
         // Store cell ID
         h_cell_id[i] = cell_id;
@@ -207,7 +206,6 @@ void free_system(ParticleSystem& p_sys, CellSystem& c_sys) {
     cudaFree(c_sys.d_temperature);
     cudaFree(c_sys.d_vel_sum_x);
     cudaFree(c_sys.d_vel_sum_y);
-    cudaFree(c_sys.d_vel_sum_z);
     cudaFree(c_sys.d_vel_sq_sum);
     cudaFree(c_sys.d_cell_particle_count);
     cudaFree(c_sys.d_cell_offset);

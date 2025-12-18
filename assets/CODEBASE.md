@@ -232,12 +232,18 @@ void sort_particles(ParticleSystem& p_sys, CellSystem& c_sys);
 ### `visualize.h`
 Debug output interface:
 ```cpp
-// Dump timestep data (cell + particle files) for visualization
+// Dump cell data to file
+void dump_cells(const std::string& output_dir, int timestep, const CellSystem& c_sys);
+
+// Dump particle data to file
+void dump_particles(const std::string& output_dir, int timestep, const ParticleSystem& p_sys);
+
+// Dump both cells and particles (convenience function)
 void dump_simulation(const std::string& output_dir, int timestep,
                      const ParticleSystem& p_sys, const CellSystem& c_sys);
 
-// Dump final particle data for evaluation (mandatory, always called)
-void dump_final_result(const std::string& output_dir, const ParticleSystem& p_sys);
+// Dump final cell data (mandatory output)
+void dump_final_cells(const std::string& output_dir, const CellSystem& c_sys);
 ```
 
 ---
@@ -288,7 +294,13 @@ struct SourceSystem {
 
 #### Functions:
 ```cpp
-// Load a source from schedule file
+// Load source configuration from YAML file (without schedule)
+bool load_source_config(const std::string& path, ParticleSource& source);
+
+// Load schedule from .dat file
+bool load_schedule(const std::string& path, ParticleSource& source);
+
+// Load source with embedded schedule (backward compatibility)
 bool load_source(const std::string& path, ParticleSource& source);
 
 // Initialize empty source system
@@ -327,11 +339,13 @@ CUDA error checking macro:
    - `-c, --config`: Path to YAML config file
    - `-o, --output`: Output directory for dumps
    - `-g, --geometry`: Path to geometry file (optional)
-   - `-s, --source`: Path to source schedule file (can be specified multiple times)
-   - `-d, --dump`: Enable visualization dumps
-   - `--dump-start`: First timestep to dump (default: 0)
-   - `--dump-max`: Maximum dumps (default: 100)
-   - `--dump-skip`: Dump every N timesteps (default: 1)
+   - `-s, --source`: Path to source config YAML file (can be specified multiple times)
+   - `-S, --schedule`: Path to schedule .dat file (must match -s count, or use embedded schedule)
+   - `--vis`: Enable visualization dumps (cells only)
+   - `--vis-particle`: Also dump particles (requires --vis)
+   - `--vis-start`: First timestep to dump (default: 0)
+   - `--vis-max`: Maximum dumps (default: 100)
+   - `--vis-skip`: Dump every N timesteps (default: 1)
 
 2. **Configuration Loading**: Calls `load_config()` and `make_sim_params()`
 
@@ -348,10 +362,10 @@ CUDA error checking macro:
        4. Launch finalize_sampling_kernel (compute density & temperature)
        5. Call sort_particles (reorder by cell)
        6. Swap double buffers
-       7. Optionally dump state (based on dump settings)
+       7. Optionally dump cells/particles (based on --vis settings)
    ```
 
-5. **Final Dump**: Always dumps `particle.dat` to output directory for evaluation
+5. **Final Dump**: Always dumps `cell.dat` to output directory for evaluation
 
 6. **Cleanup**: Calls `free_system()`
 
@@ -442,40 +456,52 @@ nx ny lx ly
 - **Tangential component**: Standard Maxwellian (normal distribution)
 - **Z component**: Standard Maxwellian
 
-**Schedule File Format:**
+**Source Config File Format (YAML):**
+```yaml
+# Total particles (must match schedule sum)
+total_particles: 1000
+
+# Line segment where particles spawn
+geometry:
+  start_x: 0.0
+  start_y: 0.1
+  end_x: 0.0
+  end_y: 0.9
+
+# Emission direction (normalized automatically)
+direction:
+  x: 1.0
+  y: 0.0
+
+# Velocity distribution parameters
+velocity:
+  thermal_vel: 300.0    # OR temperature: <K>
+  stream_x: 500.0       # OR bulk_velocity: <m/s>
+  stream_y: 0.0
+  stream_z: 0.0
+```
+
+**Schedule File Format (.dat):**
 ```
 # Comments start with #
-# Key-value parameters
-total_particles 1000
-start_x 0.0
-start_y 0.1
-end_x 0.0
-end_y 0.9
-dir_x 1.0
-dir_y 0.0
-thermal_vel 300.0
-stream_vel_x 500.0
-stream_vel_y 0.0
-stream_vel_z 0.0
-
-# Schedule entries: timestep count
+# timestep count
 0 100
 10 100
 20 100
 ...
 ```
 
-**Parameters:**
+**Source Config Parameters:**
 | Key | Description |
 |-----|-------------|
 | `total_particles` | Sum of all particles to be emitted |
-| `start_x`, `start_y` | Segment start point |
-| `end_x`, `end_y` | Segment end point |
-| `dir_x`, `dir_y` | Emission direction (normalized automatically) |
-| `thermal_vel` | Thermal velocity standard deviation (m/s) |
-| `stream_vel_x/y/z` | Mean stream velocity components |
-| `temperature` | Alternative to thermal_vel (K) |
-| `bulk_velocity` | Alternative to stream velocity projection |
+| `geometry.start_x/y` | Segment start point |
+| `geometry.end_x/y` | Segment end point |
+| `direction.x/y` | Emission direction (normalized automatically) |
+| `velocity.thermal_vel` | Thermal velocity standard deviation (m/s) |
+| `velocity.temperature` | Alternative to thermal_vel (K) |
+| `velocity.stream_x/y/z` | Mean stream velocity components |
+| `velocity.bulk_velocity` | Alternative to stream velocity projection |
 
 **Inactive Particles:**
 - Source particles are pre-allocated with `cell_id = INACTIVE_CELL_ID (-1)`
@@ -512,8 +538,8 @@ stream_vel_z 0.0
 
 **Output Files:**
 - `{timestep}-cell.dat`: Cell ID, particle count, offset, density, temperature
-- `{timestep}-particle.dat`: Particle ID, position (x,y), velocity (x,y,z), species, cell ID
-- `particle.dat`: Final particle state (mandatory output for evaluation)
+- `{timestep}-particle.dat`: Particle ID, position (x,y), velocity (x,y,z), species, cell ID (only if `--vis-particle`)
+- `cell.dat`: Final cell state (mandatory output for evaluation)
 
 ---
 
@@ -565,6 +591,58 @@ python scripts/draw_result.py -i outputs/test -c config.yaml [options]
 
 ---
 
+### `vis_map.py`
+Python script to create animated GIFs of density and temperature heatmaps (uses PyTorch for acceleration):
+
+```bash
+python scripts/vis_map.py -i outputs/test/visualization -c config.yaml [options]
+```
+
+**Options:**
+| Flag | Description |
+|------|-------------|
+| `-i, --input` | Input directory with cell dump files (*-cell.dat) |
+| `-o, --output` | Output directory for GIFs (default: same as input) |
+| `-c, --config` | Config YAML for grid dimensions |
+| `-g, --geometry` | Geometry file to overlay solid objects |
+| `--downsample` | Downsample factor (e.g., 2 = halve resolution) |
+| `--fps` | Frames per second (default: 10) |
+| `--dpi` | Image resolution (default: 100) |
+| `--log-scale` | Use logarithmic scale for density |
+| `--device` | PyTorch device: `cuda` or `cpu` |
+
+**Output:**
+- `density.gif`: Animated density heatmap
+- `temperature.gif`: Animated temperature heatmap
+
+---
+
+### `schedule.py`
+Python script to generate particle emission schedules:
+
+```bash
+python scripts/schedule.py -c source_config.yaml -o schedule.dat --start 0 --end 5000 --profile uniform
+```
+
+**Options:**
+| Flag | Description |
+|------|-------------|
+| `-c, --config` | Source config YAML (to read total_particles) |
+| `-o, --output` | Output schedule .dat file |
+| `--start` | First timestep for emission |
+| `--end` | Last timestep (exclusive) |
+| `--profile` | Emission profile: `uniform`, `ramp_up`, `ramp_down`, `gaussian`, `burst` |
+| `--burst-timesteps` | For burst profile: comma-separated timesteps |
+
+**Profiles:**
+- `uniform`: Equal particles per timestep
+- `ramp_up`: Linearly increasing emission
+- `ramp_down`: Linearly decreasing emission
+- `gaussian`: Bell curve centered at midpoint
+- `burst`: All particles at specified timesteps
+
+---
+
 ## Build System
 
 **CMake** with CUDA language support:
@@ -576,11 +654,18 @@ cmake -B build/Release -DCMAKE_BUILD_TYPE=Release
 # Build
 cmake --build build/Release
 
-# Run
-./build/Release/dsmc_solver -c assets/testcases/case-00.yaml -d -o outputs/test
+# Run (basic)
+./build/Release/dsmc_solver -c assets/testcases/case-00/config.yaml -o outputs/test
 
-# Run with geometry
-./build/Release/dsmc_solver -c assets/testcases/case-00.yaml -g assets/testcases/segment-test.dat -d -o outputs/test
+# Run with visualization
+./build/Release/dsmc_solver -c assets/testcases/case-00/config.yaml --vis -o outputs/test
+
+# Run with geometry and particle sources
+./build/Release/dsmc_solver -c assets/testcases/case-00/config.yaml \
+    -g assets/testcases/case-00/geometry/circle.dat \
+    -s assets/testcases/case-00/source/left.yaml \
+    -S assets/testcases/case-00/source/schedule.dat \
+    --vis --vis-particle -o outputs/test
 ```
 
 **Dependencies:**

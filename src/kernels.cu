@@ -26,7 +26,6 @@ __global__ void reset_sampling_kernel(CellSystem c_sys) {
     c_sys.d_temperature[idx] = 0.0f;
     c_sys.d_vel_sum_x[idx] = 0.0f;
     c_sys.d_vel_sum_y[idx] = 0.0f;
-    c_sys.d_vel_sum_z[idx] = 0.0f;
     c_sys.d_vel_sq_sum[idx] = 0.0f;
 }
 
@@ -52,30 +51,29 @@ __global__ void finalize_sampling_kernel(CellSystem c_sys, SimParams params) {
     c_sys.d_density[idx] = n_density;
 
     // Temperature from kinetic theory:
-    // T = (m / 3k_B) * <c^2> where c = v - <v> is the peculiar velocity
+    // T = (m / 2k_B) * <c^2> where c = v - <v> is the peculiar velocity (2D)
     // <c^2> = <v^2> - <v>^2
-    // For 3D: T = m/(3*k_B) * (<vx^2 + vy^2 + vz^2> - <vx>^2 - <vy>^2 - <vz>^2)
+    // For 2D: T = m/(2*k_B) * (<vx^2 + vy^2> - <vx>^2 - <vy>^2)
 
     float inv_n = 1.0f / (float)n_particles;
 
     // Mean velocities
     float mean_vx = c_sys.d_vel_sum_x[idx] * inv_n;
     float mean_vy = c_sys.d_vel_sum_y[idx] * inv_n;
-    float mean_vz = c_sys.d_vel_sum_z[idx] * inv_n;
 
     // Mean of velocity squared
     float mean_v_sq = c_sys.d_vel_sq_sum[idx] * inv_n;
 
     // Peculiar velocity squared: <c^2> = <v^2> - |<v>|^2
-    float mean_c_sq = mean_v_sq - (mean_vx * mean_vx + mean_vy * mean_vy + mean_vz * mean_vz);
+    float mean_c_sq = mean_v_sq - (mean_vx * mean_vx + mean_vy * mean_vy);
 
     // Prevent negative values due to floating point errors
     mean_c_sq = fmaxf(mean_c_sq, 0.0f);
 
-    // Temperature: T = m * <c^2> / (3 * k_B)
+    // Temperature: T = m * <c^2> / (2 * k_B) for 2D
     // Boltzmann constant k_B = 1.380649e-23 J/K
     const float k_B = 1.380649e-23f;
-    float temperature = params.particle_mass * mean_c_sq / (3.0f * k_B);
+    float temperature = params.particle_mass * mean_c_sq / (2.0f * k_B);
 
     c_sys.d_temperature[idx] = temperature;
 }
@@ -183,30 +181,49 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     __shared__ int s_species[MAX_PARTICLES_PER_CELL];
     __shared__ int s_subcell[MAX_PARTICLES_PER_CELL];
 
+    // Shared segment for this cell (loaded once, used by all threads)
+    __shared__ Segment s_segment;
+
     // Helper to count active particles in this cell
     __shared__ int s_num_particles;
 
     // Retrieve pre-calculated offset for this cell from the global sorted list
-    int cell_start_idx = c_sys.d_cell_offset[cell_idx];
-    int cell_count = c_sys.d_cell_particle_count[cell_idx];
+    // Use __ldg() for read-only data to leverage texture cache
+    int cell_start_idx = __ldg(&c_sys.d_cell_offset[cell_idx]);
+    int cell_count = __ldg(&c_sys.d_cell_particle_count[cell_idx]);
 
-    if (tid == 0) s_num_particles = cell_count;
+    // Thread 0 loads shared data
+    // Note: Can't use __ldg() for Segment struct (custom type not supported)
+    if (tid == 0) {
+        s_num_particles = cell_count;
+        s_segment = c_sys.d_segments[cell_idx];
+        
+        // Check for overflow - this is a critical error
+        // if (cell_count > MAX_PARTICLES_PER_CELL) {
+        //     printf("ERROR: Cell %d has %d particles (max=%d). Increase MAX_PARTICLES_PER_CELL or use finer grid.\n",
+        //            cell_idx, cell_count, MAX_PARTICLES_PER_CELL);
+        // }
+    }
     __syncthreads();
+
+    // Clamp to prevent shared memory overflow (particles beyond limit are ignored)
+    int safe_num_particles = min(s_num_particles, MAX_PARTICLES_PER_CELL);
 
     // --- Step 1: Copy to Shared Memory [cite: 110] ---
     // Parallel copy using all threads. Coalesced because global input is sorted.
-    for (int i = tid; i < s_num_particles; i += THREADS_PER_BLOCK) {
+    // Use __ldg() for read-only texture cache path
+    for (int i = tid; i < safe_num_particles; i += THREADS_PER_BLOCK) {
         int global_idx = cell_start_idx + i;
-        s_pos[i] = p_sys.d_pos[global_idx];
-        s_vel[i] = p_sys.d_vel[global_idx];
-        s_species[i] = p_sys.d_species[global_idx];
+        s_pos[i] = __ldg(&p_sys.d_pos[global_idx]);
+        s_vel[i] = __ldg(&p_sys.d_vel[global_idx]);
+        s_species[i] = __ldg(&p_sys.d_species[global_idx]);
     }
     __syncthreads();
 
     // --- Step 2: Sub-cell Indexing [cite: 113] ---
     // TODO: Calculate Nsc based on the number of particles
     // Index particles into sub-cells for collision selection
-    for (int i = tid; i < s_num_particles; i += THREADS_PER_BLOCK) {
+    for (int i = tid; i < safe_num_particles; i += THREADS_PER_BLOCK) {
         // Simple logic: calculate sub-cell based on position within cell
         // TODO: Implement actual sub-cell calculation
         int sub_idx = 0;  // calculate_sub_cell(s_pos[i]);
@@ -231,13 +248,11 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     // Use shared memory reduction to minimize atomic operations
     __shared__ float s_vel_sum_x;
     __shared__ float s_vel_sum_y;
-    __shared__ float s_vel_sum_z;
     __shared__ float s_vel_sq_sum;
 
     if (tid == 0) {
         s_vel_sum_x = 0.0f;
         s_vel_sum_y = 0.0f;
-        s_vel_sum_z = 0.0f;
         s_vel_sq_sum = 0.0f;
     }
     __syncthreads();
@@ -245,21 +260,18 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     // Each thread accumulates its portion
     float local_vx_sum = 0.0f;
     float local_vy_sum = 0.0f;
-    float local_vz_sum = 0.0f;
     float local_vsq_sum = 0.0f;
 
-    for (int i = tid; i < s_num_particles; i += THREADS_PER_BLOCK) {
+    for (int i = tid; i < safe_num_particles; i += THREADS_PER_BLOCK) {
         VelocityType v = s_vel[i];
         local_vx_sum += v.x;
         local_vy_sum += v.y;
-        local_vz_sum += v.z;
-        local_vsq_sum += v.x * v.x + v.y * v.y + v.z * v.z;
+        local_vsq_sum += v.x * v.x + v.y * v.y;
     }
 
     // Atomic add to shared memory accumulators
     atomicAdd(&s_vel_sum_x, local_vx_sum);
     atomicAdd(&s_vel_sum_y, local_vy_sum);
-    atomicAdd(&s_vel_sum_z, local_vz_sum);
     atomicAdd(&s_vel_sq_sum, local_vsq_sum);
     __syncthreads();
 
@@ -267,7 +279,6 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     if (tid == 0) {
         c_sys.d_vel_sum_x[cell_idx] = s_vel_sum_x;
         c_sys.d_vel_sum_y[cell_idx] = s_vel_sum_y;
-        c_sys.d_vel_sum_z[cell_idx] = s_vel_sum_z;
         c_sys.d_vel_sq_sum[cell_idx] = s_vel_sq_sum;
     }
     __syncthreads();
@@ -280,7 +291,7 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     // --- Step 8: Movement, Wall, Locating [cite: 137] ---
     // Each thread moves specific particles.
     // Critical: Uses Double Precision for position [cite: 173]
-    for (int i = tid; i < s_num_particles; i += THREADS_PER_BLOCK) {
+    for (int i = tid; i < safe_num_particles; i += THREADS_PER_BLOCK) {
         PositionType p = s_pos[i];
         VelocityType v = s_vel[i];
 
@@ -292,12 +303,13 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
         p.x += v.x * dt;
         p.y += v.y * dt;
 
-        // 2. Segment collision check (solid objects)
-        Segment seg = c_sys.d_segments[cell_idx];
-        if (seg.exists) {
+        // 2. Segment collision check (solid objects) - uses shared memory segment
+        if (s_segment.exists) {
             float t;
-            if (segment_intersection(old_x, old_y, p.x, p.y, seg.start_x, seg.start_y, seg.end_x, seg.end_y, t)) {
-                reflect_particle(p, v, seg, t);
+            if (segment_intersection(old_x, old_y, p.x, p.y, 
+                                     s_segment.start_x, s_segment.start_y, 
+                                     s_segment.end_x, s_segment.end_y, t)) {
+                reflect_particle(p, v, s_segment, t);
             }
         }
 
@@ -341,7 +353,7 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     // --- Step 9: Copy back to Global Memory [cite: 139] ---
     // Note: We write back to the "unsorted" slot derived from the start index.
     // The sorting pass will move these to their correct new density blocks later.
-    for (int i = tid; i < s_num_particles; i += THREADS_PER_BLOCK) {
+    for (int i = tid; i < safe_num_particles; i += THREADS_PER_BLOCK) {
         int global_idx = cell_start_idx + i;
         p_sys.d_pos[global_idx] = s_pos[i];
         p_sys.d_vel[global_idx] = s_vel[i];

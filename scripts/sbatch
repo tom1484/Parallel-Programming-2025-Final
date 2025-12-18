@@ -1,0 +1,5 @@
+sbatch -A ACD114118 \
+    -N 1 -n 1 -c 1 \
+    --gpus-per-node=1 \
+    --time=00:60:00 \
+    $1
