@@ -7,9 +7,9 @@ total_particles: 10000000
 # Line segment where particles spawn: (start_x, start_y) -> (end_x, end_y)
 geometry:
   start_x: 0.0
-  start_y: 0.004
+  start_y: 0.0055
   end_x: 0.0
-  end_y: 0.006
+  end_y: 0.008
 
 # Emission direction (normalized automatically, points into domain)
 direction:
