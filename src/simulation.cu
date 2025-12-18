@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include <curand_kernel.h>
 
 #include <cub/cub.cuh>
 #include <random>
@@ -8,6 +9,13 @@
 #include "utils.cuh"
 
 using namespace std;
+
+// --- RNG Initialization Kernel for Collisions ---
+__global__ void init_collision_rng_kernel(curandState* states, int num_cells, unsigned long seed) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_cells) return;
+    curand_init(seed, idx, 0, &states[idx]);
+}
 
 // --- Allocation ---
 
@@ -61,6 +69,21 @@ void allocate_system(ParticleSystem& p_sys, CellSystem& c_sys, const SimConfig& 
 
     // Allocate segment array for solid objects
     CHECK_CUDA(cudaMalloc(&c_sys.d_segments, c_sys.total_cells * sizeof(Segment)));
+
+    // Allocate collision tracking arrays (NTC method)
+    CHECK_CUDA(cudaMalloc(&c_sys.d_sigma_cr_max, c_sys.total_cells * sizeof(float)));
+    CHECK_CUDA(cudaMalloc(&c_sys.d_rng_collision, c_sys.total_cells * sizeof(curandState)));
+
+    // Initialize sigma_cr_max with conservative initial estimate
+    vector<float> h_sigma_cr_max(c_sys.total_cells, INITIAL_SIGMA_CR_MAX);
+    CHECK_CUDA(cudaMemcpy(c_sys.d_sigma_cr_max, h_sigma_cr_max.data(), 
+                          c_sys.total_cells * sizeof(float), cudaMemcpyHostToDevice));
+
+    // Initialize collision RNG states
+    int threads = 256;
+    int blocks = (c_sys.total_cells + threads - 1) / threads;
+    init_collision_rng_kernel<<<blocks, threads>>>(c_sys.d_rng_collision, c_sys.total_cells, 42);
+    CHECK_CUDA(cudaGetLastError());
 
     printf("Allocated System: %d cells, capacity for %d particles.\n", c_sys.total_cells, buffer_size);
 }
@@ -213,4 +236,6 @@ void free_system(ParticleSystem& p_sys, CellSystem& c_sys) {
     cudaFree(c_sys.d_inactive_write_idx);
     cudaFree(c_sys.d_temp_storage);
     cudaFree(c_sys.d_segments);
+    cudaFree(c_sys.d_sigma_cr_max);
+    cudaFree(c_sys.d_rng_collision);
 }

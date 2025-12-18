@@ -48,9 +48,11 @@ SimParams make_sim_params(const SimConfig& cfg) {
     params.particle_weight = cfg.particle_weight;
     // Cell volume (2D simulation assumes unit depth = 1.0 m)
     params.cell_volume = params.cell_dx * params.cell_dy * 1.0f;
-    // Molecular mass for Argon (default gas species)
-    // Argon: 39.948 amu = 39.948 * 1.66054e-27 kg = 6.6335e-26 kg
-    params.particle_mass = 6.6335e-26f;
+    // Molecular mass (using Argon as default gas species)
+    params.particle_mass = ARGON_MASS;
+
+    // Collision parameters (Hard Sphere model for Argon)
+    params.sigma_ref = ARGON_SIGMA_REF;
 
     return params;
 }

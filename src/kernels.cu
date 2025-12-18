@@ -1,5 +1,6 @@
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
+#include <stdio.h>
 
 #include "config.h"
 #include "data_types.h"
@@ -275,14 +276,135 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     __syncthreads();
 
     // --- Step 3: Collision (NTC Method) [cite: 119] ---
-    // Each thread handles ONE sub-cell or a specific collision pair
-    // Paper: "Each thread performs collision calculation for one sub-cell" [cite: 121]
+    // Each thread handles ONE sub-cell to avoid data races [cite: 121]
+
+    // Shared memory for sub-cell particle lists
+    __shared__ int s_subcell_count[MAX_SUB_CELLS];   // Particles per sub-cell
+    __shared__ int s_subcell_start[MAX_SUB_CELLS];   // Start index per sub-cell
+    __shared__ int s_particle_idx[MAX_PARTICLES_PER_CELL];  // Sorted particle indices
+    __shared__ float s_sigma_cr_max;                 // Cell's (σ×c_r)_max
+    __shared__ curandState s_rng;                    // Shared RNG for this cell
+
+    // Initialize sub-cell counts to zero
     if (tid < MAX_SUB_CELLS) {
-        // TODO: Implement collision logic here
-        // 1. Calculate collision pairs (NTC)
-        // 2. Select candidates from shared memory (s_subcell array)
-        // 3. Perform collision (GSS/VHS model)
-        // 4. Update s_vel[candidate_idx] directly in shared memory
+        s_subcell_count[tid] = 0;
+    }
+    __syncthreads();
+
+    // Count particles per sub-cell (atomic within block)
+    for (int i = tid; i < safe_num_particles; i += THREADS_PER_BLOCK) {
+        atomicAdd(&s_subcell_count[s_subcell[i]], 1);
+    }
+    __syncthreads();
+
+    // Thread 0: compute prefix sum for sub-cell start indices, load RNG and sigma_cr_max
+    if (tid == 0) {
+        int offset = 0;
+        for (int sc = 0; sc < s_num_subcells; sc++) {
+            s_subcell_start[sc] = offset;
+            offset += s_subcell_count[sc];
+            s_subcell_count[sc] = 0;  // Reset for scatter phase
+        }
+        // Load cell's sigma_cr_max and RNG state
+        s_sigma_cr_max = c_sys.d_sigma_cr_max[cell_idx];
+        s_rng = c_sys.d_rng_collision[cell_idx];
+    }
+    __syncthreads();
+
+    // Scatter particles into sorted order by sub-cell
+    for (int i = tid; i < safe_num_particles; i += THREADS_PER_BLOCK) {
+        int sc = s_subcell[i];
+        int pos = atomicAdd(&s_subcell_count[sc], 1);
+        s_particle_idx[s_subcell_start[sc] + pos] = i;
+    }
+    __syncthreads();
+
+    // Each thread handles one sub-cell for collision processing
+    // printf("tid: %d, s_num_subcells: %d\n", tid, s_num_subcells);
+    if (tid < s_num_subcells) {
+        int sc_start = s_subcell_start[tid];
+        int sc_count = s_subcell_count[tid];
+
+        // Need at least 2 particles for collision
+        if (sc_count >= 2) {
+            // Sub-cell volume (2D + unit depth)
+            float V_subcell = subcell_dx * subcell_dy * 1.0f;
+
+            // NTC: Expected number of collision pairs
+            // M_coll = 0.5 * N * (N-1) * F_num * (σ_T × c_r)_max * dt / V_subcell
+            float M_coll = 0.5f * (float)sc_count * (float)(sc_count - 1)
+                         * params.particle_weight * s_sigma_cr_max * params.dt / V_subcell;
+
+            // printf("V_subcell: %.10f\ns_sigma_cr_max: %.10f\nM_coll: %.10f\n\n", V_subcell, s_sigma_cr_max, M_coll);
+
+            // Use thread-local RNG (copy from shared, offset by tid for independence)
+            curandState local_rng = s_rng;
+            skipahead(tid * 100, &local_rng);  // Offset each thread's sequence
+
+            // Stochastic rounding: floor(M_coll) + probabilistic extra
+            int num_pairs = (int)M_coll;
+            if (curand_uniform(&local_rng) < (M_coll - (float)num_pairs)) {
+                num_pairs++;
+            }
+
+            // Process collision pairs
+            for (int c = 0; c < num_pairs; c++) {
+                // Select random pair from this sub-cell
+                int local_i = (int)(curand_uniform(&local_rng) * sc_count);
+                int local_j = (int)(curand_uniform(&local_rng) * (sc_count - 1));
+                if (local_j >= local_i) local_j++;  // Ensure i != j
+
+                int pi = s_particle_idx[sc_start + local_i];
+                int pj = s_particle_idx[sc_start + local_j];
+
+                // Get velocities
+                VelocityType v1 = s_vel[pi];
+                VelocityType v2 = s_vel[pj];
+
+                // Relative velocity and speed
+                float dvx = v1.x - v2.x;
+                float dvy = v1.y - v2.y;
+                float cr = sqrtf(dvx * dvx + dvy * dvy);
+
+                // σ × c_r for this pair (Hard Sphere: σ is constant)
+                float sigma_cr = params.sigma_ref * cr;
+
+                // Update maximum if needed (for future timesteps)
+                if (sigma_cr > s_sigma_cr_max) {
+                    s_sigma_cr_max = sigma_cr;
+                }
+
+                // Accept/reject based on NTC probability
+                if (curand_uniform(&local_rng) < sigma_cr / s_sigma_cr_max) {
+                    // Collision accepted - perform isotropic scattering
+
+                    // Center of mass velocity (conserved)
+                    float vcm_x = 0.5f * (v1.x + v2.x);
+                    float vcm_y = 0.5f * (v1.y + v2.y);
+
+                    // Random scattering direction (2D isotropic)
+                    float theta = curand_uniform(&local_rng) * 2.0f * 3.14159265359f;
+                    float ex = cosf(theta);
+                    float ey = sinf(theta);
+
+                    // Post-collision velocities (conserve momentum and energy)
+                    float half_cr = 0.5f * cr;
+                    s_vel[pi] = make_float2(vcm_x + half_cr * ex, vcm_y + half_cr * ey);
+                    s_vel[pj] = make_float2(vcm_x - half_cr * ex, vcm_y - half_cr * ey);
+
+                    // printf("Collision accepted - performing isotropic scattering\n");
+                    // printf("Particle 1: (%f, %f) -> (%f, %f)\n", v1.x, v1.y, s_vel[pi].x, s_vel[pi].y);
+                    // printf("Particle 2: (%f, %f) -> (%f, %f)\n", v2.x, v2.y, s_vel[pj].x, s_vel[pj].y);
+                }
+            }
+        }
+    }
+    __syncthreads();
+
+    // Thread 0 writes back updated sigma_cr_max and RNG state
+    if (tid == 0) {
+        c_sys.d_sigma_cr_max[cell_idx] = s_sigma_cr_max;
+        c_sys.d_rng_collision[cell_idx] = s_rng;
     }
     __syncthreads();
 
@@ -347,6 +469,7 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
         p.y += v.y * dt;
 
         // 2. Segment collision check (solid objects) - uses shared memory segment
+        // NOTE: Not sure if oscillation would occur
         if (s_segment.exists) {
             float t;
             if (segment_intersection(old_x, old_y, p.x, p.y, 

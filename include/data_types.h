@@ -1,6 +1,8 @@
 #ifndef DSMC_DATA_TYPES_H
 #define DSMC_DATA_TYPES_H
 
+#include <curand_kernel.h>
+
 #include "config.h"
 
 // Line segment for solid object boundaries (one per cell, if exists)
@@ -31,6 +33,9 @@ struct SimParams {
     float particle_weight;  // Real atoms per simulator particle (Fnum)
     float cell_volume;      // Cell volume (2D: area * unit depth = dx * dy * 1.0)
     float particle_mass;    // Molecular mass (kg), e.g., Argon = 6.63e-26 kg
+
+    // Collision parameters (NTC method)
+    float sigma_ref;  // Reference cross-section (m²) for hard-sphere model
 };
 
 struct ParticleSystem {
@@ -70,6 +75,10 @@ struct CellSystem {
 
     // Solid object geometry
     Segment* d_segments;  // Array of segments, one per cell
+
+    // Collision tracking (NTC method)
+    float* d_sigma_cr_max;        // Maximum (σ × c_r) per cell, updated during simulation
+    curandState* d_rng_collision; // RNG states for collision partner selection (one per cell)
 };
 
 #endif  // DSMC_DATA_TYPES_H
