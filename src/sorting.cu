@@ -55,6 +55,19 @@ __global__ void reorder_particles_kernel(ParticleSystem sys, int* d_write_offset
     sys.d_species_sorted[write_idx] = sys.d_species[idx];
 }
 
+// Kernel 4: Calculate total active particles on device
+// Computes: d_inactive_write_idx = d_cell_offset[num_cells-1] + d_cell_particle_count[num_cells-1]
+__global__ void calc_inactive_write_idx_kernel(
+    const int* d_cell_offset,
+    const int* d_cell_particle_count,
+    int* d_inactive_write_idx,
+    int num_cells
+) {
+    if (threadIdx.x == 0 && blockIdx.x == 0) {
+        *d_inactive_write_idx = d_cell_offset[num_cells - 1] + d_cell_particle_count[num_cells - 1];
+    }
+}
+
 // ------------------------------------------------------------------
 // Host Function: The Sorting Pipeline
 // ------------------------------------------------------------------
@@ -103,20 +116,11 @@ void sort_particles(ParticleSystem& p_sys, CellSystem& c_sys) {
     CHECK_CUDA(
         cudaMemcpy(c_sys.d_write_offsets, c_sys.d_cell_offset, num_cells * sizeof(int), cudaMemcpyDeviceToDevice));
 
-    // Calculate where inactive particles should start writing
+    // Calculate where inactive particles should start writing (on device)
     // They go after all active particles: offset[last_cell] + count[last_cell]
-    // We can compute this as total_active = sum of all counts
-    // For simplicity, we'll initialize inactive write index to the sum of prefix + last count
-    // which equals the total number of active particles
-    int total_active;
-    int last_offset, last_count;
-    CHECK_CUDA(cudaMemcpy(&last_offset, &c_sys.d_cell_offset[num_cells - 1], sizeof(int), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(
-        cudaMemcpy(&last_count, &c_sys.d_cell_particle_count[num_cells - 1], sizeof(int), cudaMemcpyDeviceToHost));
-    total_active = last_offset + last_count;
-
-    // Set the inactive write index to start after all active particles
-    CHECK_CUDA(cudaMemcpy(c_sys.d_inactive_write_idx, &total_active, sizeof(int), cudaMemcpyHostToDevice));
+    calc_inactive_write_idx_kernel<<<1, 1>>>(c_sys.d_cell_offset, c_sys.d_cell_particle_count,
+                                              c_sys.d_inactive_write_idx, num_cells);
+    CHECK_CUDA(cudaGetLastError());
 
     // Scatter particles to d_pos_sorted, d_vel_sorted, etc.
     reorder_particles_kernel<<<p_blocks, threads>>>(p_sys, c_sys.d_write_offsets, c_sys.d_inactive_write_idx,

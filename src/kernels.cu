@@ -188,10 +188,12 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     __shared__ int s_num_particles;
 
     // Retrieve pre-calculated offset for this cell from the global sorted list
-    int cell_start_idx = c_sys.d_cell_offset[cell_idx];
-    int cell_count = c_sys.d_cell_particle_count[cell_idx];
+    // Use __ldg() for read-only data to leverage texture cache
+    int cell_start_idx = __ldg(&c_sys.d_cell_offset[cell_idx]);
+    int cell_count = __ldg(&c_sys.d_cell_particle_count[cell_idx]);
 
     // Thread 0 loads shared data
+    // Note: Can't use __ldg() for Segment struct (custom type not supported)
     if (tid == 0) {
         s_num_particles = cell_count;
         s_segment = c_sys.d_segments[cell_idx];
@@ -200,11 +202,12 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
 
     // --- Step 1: Copy to Shared Memory [cite: 110] ---
     // Parallel copy using all threads. Coalesced because global input is sorted.
+    // Use __ldg() for read-only texture cache path
     for (int i = tid; i < s_num_particles; i += THREADS_PER_BLOCK) {
         int global_idx = cell_start_idx + i;
-        s_pos[i] = p_sys.d_pos[global_idx];
-        s_vel[i] = p_sys.d_vel[global_idx];
-        s_species[i] = p_sys.d_species[global_idx];
+        s_pos[i] = __ldg(&p_sys.d_pos[global_idx]);
+        s_vel[i] = __ldg(&p_sys.d_vel[global_idx]);
+        s_species[i] = __ldg(&p_sys.d_species[global_idx]);
     }
     __syncthreads();
 
