@@ -4,6 +4,3 @@ module load cuda
 
 source ~/spack/share/spack/setup-env.sh
 spack load yaml-cpp
-
-conda_init
-conda activate dsmc

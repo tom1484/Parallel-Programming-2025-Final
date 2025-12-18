@@ -1,7 +1,21 @@
 build/
 outputs/
+outputs-cpu/
+outputs-gpu/
 
 __pycache__/
+
+# Data files
+*.dat
+*.sh
+*.md
+*.gitignore
+env
+
+
+# Cache directories
+src_cpu/.cache/
+.cache/
 
 assets/**/geometry/
 assets/**/source/*.dat
