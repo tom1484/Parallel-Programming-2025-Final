@@ -13,7 +13,7 @@
 // --- Simulation Constants ---
 // Derived max particles based on shared memory limit (approx 120 in paper) [cite: 100]
 #define MAX_PARTICLES_PER_CELL 512
-#define MAX_SUB_CELLS 48
+#define MAX_SUB_CELLS 64
 
 // Special cell ID to mark inactive particles (not processed by physics)
 #define INACTIVE_CELL_ID (-1)

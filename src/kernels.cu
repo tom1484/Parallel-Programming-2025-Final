@@ -187,6 +187,13 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     // Helper to count active particles in this cell
     __shared__ int s_num_particles;
 
+    // Sub-cell grid parameters (computed adaptively based on particle count)
+    __shared__ int s_nsc_x;           // Sub-cell grid width
+    __shared__ int s_nsc_y;           // Sub-cell grid height
+    __shared__ int s_num_subcells;    // Total sub-cells (nsc_x * nsc_y)
+    __shared__ float s_cell_origin_x; // Cell origin X for relative positioning
+    __shared__ float s_cell_origin_y; // Cell origin Y for relative positioning
+
     // Retrieve pre-calculated offset for this cell from the global sorted list
     // Use __ldg() for read-only data to leverage texture cache
     int cell_start_idx = __ldg(&c_sys.d_cell_offset[cell_idx]);
@@ -220,14 +227,50 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     }
     __syncthreads();
 
-    // --- Step 2: Sub-cell Indexing [cite: 113] ---
-    // TODO: Calculate Nsc based on the number of particles
-    // Index particles into sub-cells for collision selection
+    // --- Step 2: Sub-cell Indexing [cite: 113, 116] ---
+    // Particles indexed into N_sc ≈ N_p/4 sub-cells for nearest-neighbor selection
+    // Thread 0 computes adaptive grid dimensions
+    if (tid == 0) {
+        // Target ~4 particles per sub-cell as per paper
+        int target_subcells = max(1, (safe_num_particles + 3) / 4);
+        target_subcells = min(target_subcells, MAX_SUB_CELLS);
+
+        // Create roughly square grid
+        s_nsc_x = (int)sqrtf((float)target_subcells);
+        s_nsc_x = max(1, min(s_nsc_x, 8));
+        s_nsc_y = (target_subcells + s_nsc_x - 1) / s_nsc_x;
+        s_nsc_y = max(1, min(s_nsc_y, 8));
+        s_num_subcells = s_nsc_x * s_nsc_y;
+
+        // Cell origin for relative positioning
+        int cell_cx = cell_idx % grid_nx;
+        int cell_cy = cell_idx / grid_nx;
+        s_cell_origin_x = cell_cx * dx;
+        s_cell_origin_y = cell_cy * dy;
+    }
+    __syncthreads();
+
+    // Sub-cell dimensions within this cell
+    float subcell_dx = dx / (float)s_nsc_x;
+    float subcell_dy = dy / (float)s_nsc_y;
+
+    // Assign each particle to its sub-cell based on position
     for (int i = tid; i < safe_num_particles; i += THREADS_PER_BLOCK) {
-        // Simple logic: calculate sub-cell based on position within cell
-        // TODO: Implement actual sub-cell calculation
-        int sub_idx = 0;  // calculate_sub_cell(s_pos[i]);
-        s_subcell[i] = sub_idx;
+        PositionType p = s_pos[i];
+
+        // Relative position within cell [0, dx) × [0, dy)
+        float rel_x = (float)(p.x - s_cell_origin_x);
+        float rel_y = (float)(p.y - s_cell_origin_y);
+
+        // Clamp to valid range (handle floating-point edge cases)
+        rel_x = fmaxf(0.0f, fminf(rel_x, dx - 1e-6f));
+        rel_y = fmaxf(0.0f, fminf(rel_y, dy - 1e-6f));
+
+        // Compute sub-cell indices
+        int scx = min((int)(rel_x / subcell_dx), s_nsc_x - 1);
+        int scy = min((int)(rel_y / subcell_dy), s_nsc_y - 1);
+
+        s_subcell[i] = scy * s_nsc_x + scx;
     }
     __syncthreads();
 
