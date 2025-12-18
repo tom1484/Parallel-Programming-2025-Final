@@ -181,6 +181,9 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     __shared__ int s_species[MAX_PARTICLES_PER_CELL];
     __shared__ int s_subcell[MAX_PARTICLES_PER_CELL];
 
+    // Shared segment for this cell (loaded once, used by all threads)
+    __shared__ Segment s_segment;
+
     // Helper to count active particles in this cell
     __shared__ int s_num_particles;
 
@@ -188,7 +191,11 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
     int cell_start_idx = c_sys.d_cell_offset[cell_idx];
     int cell_count = c_sys.d_cell_particle_count[cell_idx];
 
-    if (tid == 0) s_num_particles = cell_count;
+    // Thread 0 loads shared data
+    if (tid == 0) {
+        s_num_particles = cell_count;
+        s_segment = c_sys.d_segments[cell_idx];
+    }
     __syncthreads();
 
     // --- Step 1: Copy to Shared Memory [cite: 110] ---
@@ -284,12 +291,13 @@ __global__ void solve_cell_kernel(ParticleSystem p_sys, CellSystem c_sys, SimPar
         p.x += v.x * dt;
         p.y += v.y * dt;
 
-        // 2. Segment collision check (solid objects)
-        Segment seg = c_sys.d_segments[cell_idx];
-        if (seg.exists) {
+        // 2. Segment collision check (solid objects) - uses shared memory segment
+        if (s_segment.exists) {
             float t;
-            if (segment_intersection(old_x, old_y, p.x, p.y, seg.start_x, seg.start_y, seg.end_x, seg.end_y, t)) {
-                reflect_particle(p, v, seg, t);
+            if (segment_intersection(old_x, old_y, p.x, p.y, 
+                                     s_segment.start_x, s_segment.start_y, 
+                                     s_segment.end_x, s_segment.end_y, t)) {
+                reflect_particle(p, v, s_segment, t);
             }
         }
 
