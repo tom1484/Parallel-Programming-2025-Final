@@ -35,6 +35,7 @@ add_executable(dsmc_solver
     src/visualize.cu
     src/geometry.cu
     src/source.cu
+    src/profiler.cu
 )
 
 target_include_directories(dsmc_solver PRIVATE
@@ -74,6 +75,8 @@ if(CMAKE_BUILD_TYPE MATCHES Debug)
         $<$<COMPILE_LANGUAGE:CUDA>:-G>  # CUDA debug info
         $<$<COMPILE_LANGUAGE:CUDA>:-g>
     )
+    # Enable profiler in debug builds
+    target_compile_definitions(dsmc_solver PRIVATE DEBUG)
 endif()
 
 # Print configuration info

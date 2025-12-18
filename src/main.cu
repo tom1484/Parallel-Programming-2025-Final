@@ -5,6 +5,7 @@
 
 #include "argparse.hpp"
 #include "config.h"
+#include "profiler.h"
 #include "data_types.h"
 #include "geometry.h"
 #include "kernels.h"
@@ -41,6 +42,7 @@ int main(int argc, char** argv) {
         .scan<'i', int>()
         .help("Maximum number of timesteps to dump (default: 100)");
     program.add_argument("--vis-skip").default_value(1).scan<'i', int>().help("Dump every N timesteps (default: 1)");
+    program.add_argument("--dump").flag().help("Dump final results (cells only) to output directory");
 
     try {
         program.parse_args(argc, argv);
@@ -60,6 +62,7 @@ int main(int argc, char** argv) {
     int vis_start = program.get<int>("--vis-start");
     int vis_max = program.get<int>("--vis-max");
     int vis_skip = program.get<int>("--vis-skip");
+    bool dump_final = program.get<bool>("--dump");
 
     // Validate source/schedule pairing
     if (!schedule_paths.empty() && schedule_paths.size() != source_paths.size()) {
@@ -203,24 +206,39 @@ int main(int argc, char** argv) {
 
     for (int step = 0; step < config.total_steps; step++) {
         // --- Emit Particles from Sources ---
-        emit_particles(source_sys, p_sys, c_sys, sim_params, step);
+        {
+            PROFILE(emit_particles);
+            emit_particles(source_sys, p_sys, c_sys, sim_params, step);
+        }
 
         // --- Reset Sampling Accumulators ---
-        reset_sampling_kernel<<<reset_blocks, reset_threads>>>(c_sys);
-        CHECK_CUDA(cudaGetLastError());
+        {
+            PROFILE(reset_sampling);
+            reset_sampling_kernel<<<reset_blocks, reset_threads>>>(c_sys);
+            CHECK_CUDA(cudaGetLastError());
+        }
 
         // --- Physics Kernel ---
         // Each block processes one cell independently [cite: 62]
         // 64 threads per block (thread team) [cite: 107]
-        solve_cell_kernel<<<c_sys.total_cells, THREADS_PER_BLOCK>>>(p_sys, c_sys, sim_params);
-        CHECK_CUDA(cudaGetLastError());
+        {
+            PROFILE(solve_cell);
+            solve_cell_kernel<<<c_sys.total_cells, THREADS_PER_BLOCK>>>(p_sys, c_sys, sim_params);
+            CHECK_CUDA(cudaGetLastError());
+        }
 
         // --- Finalize Sampling (compute density & temperature) ---
-        finalize_sampling_kernel<<<reset_blocks, reset_threads>>>(c_sys, sim_params);
-        CHECK_CUDA(cudaGetLastError());
+        {
+            PROFILE(finalize_sampling);
+            finalize_sampling_kernel<<<reset_blocks, reset_threads>>>(c_sys, sim_params);
+            CHECK_CUDA(cudaGetLastError());
+        }
 
         // --- Sorting Pipeline ---
-        sort_particles(p_sys, c_sys);
+        {
+            PROFILE(sort_particles);
+            sort_particles(p_sys, c_sys);
+        }
 
         // --- Buffer Swap ---
         swap(p_sys.d_pos, p_sys.d_pos_sorted);
@@ -242,13 +260,19 @@ int main(int argc, char** argv) {
     // =========================================================================
     // Final Result Dump (mandatory - cells only)
     // =========================================================================
-    dump_final_cells(output_dir, c_sys);
+    if (dump_final) {
+        dump_final_cells(output_dir, c_sys);
+    }
 
     // =========================================================================
     // Cleanup
     // =========================================================================
     free_source_system(source_sys);
     free_system(p_sys, c_sys);
+
+    // Print and dump profiler summary (only if DEBUG is defined)
+    Profiler::print_summary();
+    Profiler::dump_summary(output_dir + "/profiler.txt");
 
     printf("Simulation complete.\n");
     return 0;
