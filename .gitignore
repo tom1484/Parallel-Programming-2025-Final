@@ -20,3 +20,5 @@ src_cpu/.cache/
 assets/**/geometry/
 assets/**/source/*.dat
 scripts/test/
+
+**/slurm-*.out
