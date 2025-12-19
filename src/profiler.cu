@@ -1,6 +1,6 @@
 #include "profiler.h"
 
-#ifdef DEBUG
+// #ifdef DEBUG
 
 #include <cuda_runtime.h>
 
@@ -151,4 +151,4 @@ ScopedProfiler::~ScopedProfiler() {
     Profiler::instance().stop(name_);
 }
 
-#endif  // DEBUG
+// #endif  // DEBUG

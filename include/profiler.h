@@ -18,7 +18,7 @@
 // Call Profiler::print_summary() at end of simulation to see results.
 // =============================================================================
 
-#ifdef DEBUG
+// #ifdef DEBUG
 
 class Profiler {
    public:
@@ -74,25 +74,25 @@ class ScopedProfiler {
 #define PROFILE_START(name) Profiler::instance().start(#name)
 #define PROFILE_STOP(name) Profiler::instance().stop(#name)
 
-#else  // !DEBUG
+// #else  // !DEBUG
 
-// No-op implementations when DEBUG is not defined
-class Profiler {
-   public:
-    static void print_summary() {}
-    static void dump_summary(const std::string&) {}
-    static void reset() {}
-};
+// // No-op implementations when DEBUG is not defined
+// class Profiler {
+//    public:
+//     static void print_summary() {}
+//     static void dump_summary(const std::string&) {}
+//     static void reset() {}
+// };
 
-class ScopedProfiler {
-   public:
-    explicit ScopedProfiler(const char*) {}
-};
+// class ScopedProfiler {
+//    public:
+//     explicit ScopedProfiler(const char*) {}
+// };
 
-#define PROFILE(name) ((void)0)
-#define PROFILE_START(name) ((void)0)
-#define PROFILE_STOP(name) ((void)0)
+// #define PROFILE(name) ((void)0)
+// #define PROFILE_START(name) ((void)0)
+// #define PROFILE_STOP(name) ((void)0)
 
-#endif  // DEBUG
+// #endif  // DEBUG
 
 #endif  // DSMC_PROFILER_H
