@@ -60,14 +60,23 @@ Hardware abstraction layer with compile-time constants:
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `THREADS_PER_BLOCK` | 64 | Thread team size per cell (from paper) |
-| `SHARED_MEM_PER_BLOCK` | 6144 | Shared memory budget per block (bytes) |
-| `MAX_PARTICLES_PER_CELL` | 128 | Maximum particles in shared memory |
-| `MAX_SUB_CELLS` | 36 | Maximum collision sub-cells |
+| `SHARED_MEM_PER_BLOCK` | 24576 | Shared memory budget per block (bytes) |
+| `MAX_PARTICLES_PER_CELL` | 512 | Maximum particles in shared memory |
+| `MAX_SUB_CELLS` | 64 | Maximum collision sub-cells |
 | `INACTIVE_CELL_ID` | -1 | Cell ID for inactive/unborn particles |
+
+**Gas Species Constants (Argon):**
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `ARGON_MASS` | 6.6335e-26 | Molecular mass (kg) |
+| `ARGON_DIAMETER` | 4.17e-10 | Hard-sphere diameter (m) |
+| `ARGON_SIGMA_REF` | 5.465e-19 | Reference cross-section π×d² (m²) |
+| `INITIAL_SIGMA_CR_MAX` | 3.0e-16 | Initial (σ×c_r)_max estimate (m³/s) |
 
 **Type Definitions:**
 - `PositionType` → `double2` (high precision for small displacements)
-- `VelocityType` → `float3` (single precision to save memory)
+- `VelocityType` → `float2` (2D simulation: only vx, vy needed)
 
 ---
 
@@ -87,6 +96,9 @@ struct SimParams {
     float particle_weight;      // Real atoms per simulator particle (Fnum)
     float cell_volume;          // Cell volume (dx * dy * 1.0 for 2D)
     float particle_mass;        // Molecular mass (kg), default: Argon
+    
+    // Collision parameters (NTC method)
+    float sigma_ref;            // Reference cross-section (m²) for hard-sphere model
 };
 ```
 
@@ -132,7 +144,6 @@ struct CellSystem {
     // Velocity accumulators for macroscopic sampling
     float* d_vel_sum_x;         // Sum of vx per cell
     float* d_vel_sum_y;         // Sum of vy per cell
-    float* d_vel_sum_z;         // Sum of vz per cell
     float* d_vel_sq_sum;        // Sum of |v|² per cell
     
     // Sorting infrastructure
@@ -144,6 +155,10 @@ struct CellSystem {
     
     // Solid object geometry
     Segment* d_segments;        // Array of segments, one per cell
+    
+    // Collision tracking (NTC method)
+    float* d_sigma_cr_max;        // Maximum (σ × c_r) per cell
+    curandState* d_rng_collision; // RNG states for collision (one per cell)
     
     int total_cells;
 };
@@ -379,9 +394,10 @@ CUDA error checking macro:
 ### `simulation.cu`
 **System allocation and initialization.**
 
-- `allocate_system(p_sys, c_sys, cfg, extra_particles)`: Allocates all GPU memory for particles and cells. The `extra_particles` parameter reserves space for source particles.
+- `allocate_system(p_sys, c_sys, cfg, extra_particles)`: Allocates all GPU memory for particles and cells. The `extra_particles` parameter reserves space for source particles. Also initializes collision tracking arrays (`d_sigma_cr_max` with `INITIAL_SIGMA_CR_MAX`, `d_rng_collision` with curand states).
 - `init_simulation(p_sys, c_sys, cfg, num_initial_particles)`: Initializes particle positions (avoiding solid objects) and velocities for the initial particles only.
 - `init_source_particles_inactive(p_sys, init_particles, total_particles)`: Marks source particle slots as inactive (cell_id = -1).
+- `init_collision_rng_kernel()`: CUDA kernel to initialize curand states for collision RNG.
 - `free_system()`: Frees all GPU memory
 - `is_inside_segment()`: Helper to check if a point is inside a solid object
 
@@ -392,8 +408,8 @@ CUDA error checking macro:
 
 **Execution Flow (per cell):**
 1. **Load**: Copy particles from global → shared memory (coalesced)
-2. **Sub-cell Indexing**: Assign particles to collision sub-cells
-3. **Collision**: NTC method (placeholder - to be implemented)
+2. **Sub-cell Indexing**: Assign particles to collision sub-cells (adaptive grid, ~4 particles per sub-cell)
+3. **Collision**: NTC method with Hard Sphere model and fast LCG random number generation
 4. **Sampling**: Accumulate velocity moments using shared memory reduction, write sums to global memory
 5. **Movement**: Update positions using `p += v * dt`
 6. **Segment Collision**: If cell has a segment, check ray-segment intersection and apply specular reflection
@@ -401,18 +417,28 @@ CUDA error checking macro:
 8. **Re-locate**: Calculate new cell ID based on updated position
 9. **Store**: Write back to global memory
 
+**Collision Implementation (NTC Method):**
+- **Sub-cell indexing**: Particles sorted into sub-cells for nearest-neighbor selection
+- **Adaptive sub-cell grid**: `N_sc ≈ N_p/4` sub-cells (targets ~4 particles per sub-cell)
+- **Expected collisions**: `M_coll = 0.5 × N × (N-1) × Fnum × (σ×c_r)_max × dt / V_subcell`
+- **Accept/reject**: Probability `P = (σ×c_r) / (σ×c_r)_max`
+- **Post-collision**: Isotropic scattering in center-of-mass frame
+- **Fast LCG RNG**: Uses lightweight Linear Congruential Generator instead of curand for performance
+- Each thread handles one sub-cell to avoid data races
+
 **Sampling Implementation:**
 - Uses shared memory reduction to minimize atomic operations
-- Accumulates: `Σvx`, `Σvy`, `Σvz`, `Σ(vx²+vy²+vz²)`
+- Accumulates: `Σvx`, `Σvy`, `Σ(vx²+vy²)`
 - `finalize_sampling_kernel` computes:
   - **Density**: `n = N_sim × Fnum / V_cell`
-  - **Temperature**: `T = m⟨c²⟩/(3k_B)` where `⟨c²⟩ = ⟨v²⟩ - |⟨v⟩|²`
+  - **Temperature**: `T = m⟨c²⟩/(2k_B)` where `⟨c²⟩ = ⟨v²⟩ - |⟨v⟩|²` (2D)
 
 **Key Implementation Details:**
 - Uses `__shared__` arrays for particle data (reduces global memory latency)
 - Calculates new `cell_id` from position: `cell = cy * grid_nx + cx`
 - Clamps positions and cell indices to valid domain
 - Segment collision uses parametric ray-segment intersection with specular reflection: `v' = v - 2(v·n)n`
+- Fast LCG RNG: `state = state * 1664525 + 1013904223` (Numerical Recipes parameters)
 
 ---
 
