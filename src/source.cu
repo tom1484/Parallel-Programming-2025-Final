@@ -109,20 +109,11 @@ __global__ void emit_particles_kernel(
 // ============================================================================
 
 // Helper function to finalize source after loading config (normalize direction, etc.)
-static void finalize_source_config(ParticleSource& source, float thermal_vel, 
-                                    float stream_vel_x, float stream_vel_y) {
+static void finalize_source_config(ParticleSource& source, float stream_vel_x, float stream_vel_y) {
     // Compute bulk_velocity from stream velocity if not explicitly set
     if (source.bulk_velocity == 0) {
         // Project stream velocity onto emission direction
         source.bulk_velocity = stream_vel_x * source.dir_x + stream_vel_y * source.dir_y;
-    }
-
-    // Convert thermal_vel to temperature if temperature wasn't explicitly set
-    // thermal_vel = sqrt(k_B * T / m), so T = m * thermal_vel^2 / k_B
-    // For Argon: m = 6.6335e-26 kg, k_B = 1.380649e-23
-    if (thermal_vel > 0.0f && source.temperature == 300.0f) {
-        float mass = 6.6335e-26f;
-        source.temperature = mass * thermal_vel * thermal_vel / K_BOLTZMANN;
     }
 
     // Normalize direction
@@ -187,8 +178,7 @@ bool load_source_config(const std::string& path, ParticleSource& source) {
         source.d_schedule_counts = nullptr;
         source.schedule_size = 0;
 
-        float thermal_vel = 0.0f;
-        float stream_vel_x = 0, stream_vel_y = 0, stream_vel_z = 0;
+        float stream_vel_x = 0, stream_vel_y = 0;
 
         // Parse directly from root level
         if (config["total_particles"]) {
@@ -214,15 +204,13 @@ bool load_source_config(const std::string& path, ParticleSource& source) {
         // Velocity parameters
         if (config["velocity"]) {
             YAML::Node vel = config["velocity"];
-            if (vel["thermal_vel"]) thermal_vel = vel["thermal_vel"].as<float>();
             if (vel["temperature"]) source.temperature = vel["temperature"].as<float>();
             if (vel["bulk_velocity"]) source.bulk_velocity = vel["bulk_velocity"].as<float>();
             if (vel["stream_x"]) stream_vel_x = vel["stream_x"].as<float>();
             if (vel["stream_y"]) stream_vel_y = vel["stream_y"].as<float>();
-            if (vel["stream_z"]) stream_vel_z = vel["stream_z"].as<float>();
         }
 
-        finalize_source_config(source, thermal_vel, stream_vel_x, stream_vel_y);
+        finalize_source_config(source, stream_vel_x, stream_vel_y);
 
         printf("Loaded source config from %s: %d total particles\n", path.c_str(), source.total_particles);
         printf("  Segment: (%.4f, %.4f) -> (%.4f, %.4f)\n", source.start_x, source.start_y, source.end_x, source.end_y);
@@ -288,8 +276,7 @@ bool load_source(const std::string& path, ParticleSource& source) {
         source.temperature = 300;
         source.total_particles = 0;
 
-        float thermal_vel = 0.0f;
-        float stream_vel_x = 0, stream_vel_y = 0, stream_vel_z = 0;
+        float stream_vel_x = 0, stream_vel_y = 0;
 
         // Parse source section
         if (config["source"]) {
@@ -318,12 +305,10 @@ bool load_source(const std::string& path, ParticleSource& source) {
             // Velocity parameters
             if (src["velocity"]) {
                 YAML::Node vel = src["velocity"];
-                if (vel["thermal_vel"]) thermal_vel = vel["thermal_vel"].as<float>();
                 if (vel["temperature"]) source.temperature = vel["temperature"].as<float>();
                 if (vel["bulk_velocity"]) source.bulk_velocity = vel["bulk_velocity"].as<float>();
                 if (vel["stream_x"]) stream_vel_x = vel["stream_x"].as<float>();
                 if (vel["stream_y"]) stream_vel_y = vel["stream_y"].as<float>();
-                if (vel["stream_z"]) stream_vel_z = vel["stream_z"].as<float>();
             }
         }
 
@@ -340,7 +325,7 @@ bool load_source(const std::string& path, ParticleSource& source) {
             }
         }
 
-        finalize_source_config(source, thermal_vel, stream_vel_x, stream_vel_y);
+        finalize_source_config(source, stream_vel_x, stream_vel_y);
 
         if (timesteps.empty()) {
             fprintf(stderr, "Error: No schedule entries in source file: %s\n", path.c_str());

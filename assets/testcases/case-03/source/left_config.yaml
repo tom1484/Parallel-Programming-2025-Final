@@ -18,10 +18,9 @@ direction:
 
 # Velocity distribution parameters
 velocity:
-  # Thermal velocity standard deviation (m/s)
-  thermal_vel: 300.0
+  # Temperature for thermal velocity sampling (Kelvin)
+  temperature: 432.4
   
   # Stream velocity components (m/s)
   stream_x: 500.0
   stream_y: 0.0
-  stream_z: 0.0

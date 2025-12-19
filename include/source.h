@@ -75,10 +75,9 @@ struct SourceSystem {
 //     x: <float>
 //     y: <float>
 //   velocity:
-//     thermal_vel: <float>       # OR temperature: <float>
+//     temperature: <float>       # Temperature in Kelvin for thermal velocity sampling
 //     stream_x: <float>          # OR bulk_velocity: <float>
 //     stream_y: <float>
-//     stream_z: <float>
 bool load_source_config(const std::string& path, ParticleSource& source);
 
 // Load schedule from .dat file

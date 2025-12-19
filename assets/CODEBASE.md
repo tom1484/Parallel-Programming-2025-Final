@@ -501,10 +501,9 @@ direction:
 
 # Velocity distribution parameters
 velocity:
-  thermal_vel: 300.0    # OR temperature: <K>
+  temperature: 432.4    # Temperature in Kelvin for thermal velocity sampling
   stream_x: 500.0       # OR bulk_velocity: <m/s>
   stream_y: 0.0
-  stream_z: 0.0
 ```
 
 **Schedule File Format (.dat):**
@@ -524,9 +523,8 @@ velocity:
 | `geometry.start_x/y` | Segment start point |
 | `geometry.end_x/y` | Segment end point |
 | `direction.x/y` | Emission direction (normalized automatically) |
-| `velocity.thermal_vel` | Thermal velocity standard deviation (m/s) |
-| `velocity.temperature` | Alternative to thermal_vel (K) |
-| `velocity.stream_x/y/z` | Mean stream velocity components |
+| `velocity.temperature` | Temperature in Kelvin for thermal velocity sampling |
+| `velocity.stream_x/y` | Mean stream velocity components (2D) |
 | `velocity.bulk_velocity` | Alternative to stream velocity projection |
 
 **Inactive Particles:**
